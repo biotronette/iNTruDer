@@ -22,10 +22,10 @@ source("/research/labs/experpath/vasm/shared/NextGen/judell/Rprojects/vasm_bmd/j
 runIntruder <- function(rnaSampleId){
    dev.ppdir <- getPostProcessingDir(sampleId = rnaSampleId,postProcessingFolder = 'svar-1/dev')
    reads.filename <- file.path(dev.ppdir)
-   
-   
-}
 
+
+}
+# Functions -----
 
 intruderPipe <- function(reads.filename,file.prefix,out.dir,
                          folderNum = NA,
@@ -46,13 +46,13 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
                          flash.threshold = 50,
                          overwrite_ref = FALSE,
                          optimize_velvet = TRUE){
-   
+
    # Things that used to be input variables that should maybe just be hard-coded ---
    # debug as of 5/20/21:
    #  overwrite_tx = FALSE; overwrite_blat = FALSE; overwrite_plots = FALSE; overwrite_pep = FALSE;
    # write.bed = FALSE; polyA_threshold = 15; k = seq(11,31,by=4); reads.threshold = 0;
    # flash.threshold = 50; cov_cutoff = 'dynamic';
-   
+
    # Initializing variables ----
    output <- list('seq.df' = data.frame(),
                   'tx.df' = data.frame(),
@@ -60,7 +60,7 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
                   'np.df' = data.frame(),
                   'np.ss' = AAStringSet(),
                   'blat.gr' = GRanges())
-   
+
    # wrangling the .csv file(s) -----
    if (!dir.exists(dirname(out.dir))){dir.create(dirname(out.dir)); dir.create(out.dir)
    } else if (!dir.exists(out.dir)){dir.create(out.dir)}
@@ -68,8 +68,8 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    seq.df <- loadRNAReads(reads.filename)
    # TODO: verify that loadRNAreads handles case of not merging events correctly
    message('\n*********\nBeginning analysis of ',nrow(seq.df), ' spanning RNA RPs from ',file.prefix,'...')
-   
-   
+
+
    write_jct_csv = FALSE
    if(write_jct_csv){
       event_list <- unique(seq.df$DNA_eventId)
@@ -82,36 +82,36 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
                    quote = FALSE,row.names = FALSE)
       }
    }
-   
+
    if (nrow(seq.df) == 0){
       message('No RNA reads found for any junctions.')
       return(NULL)
    }
-   
+
    output[['seq.df']] <- seq.df
-   
-   
+
+
    # Transcript wrangling ----
-   
+
    tx.dir <- file.path(out.dir,'tx')
    if (!dir.exists(tx.dir)){dir.create(tx.dir)}
-   
+
    tx.df.filename <- file.path(out.dir,paste(file.prefix,'TX.csv',sep='_'))
    tx.df_tmp.filename <- file.path(out.dir,'tx',paste(file.prefix,'TX_out.csv',sep='_'))
    tx.df <- data.frame()
    if (is.na(insert_length) & !is.na(folderNum)){insert_length <- getInsertLength(folderNum = folderNum,read_length_source = 'BMD')}
-   
+
    ## call intruderAssembly ----
-   
+
    if (overwrite_tx || ! file.exists(tx.df.filename) & ! file.exists(tx.df_tmp.filename) ){
-      
+
       tic()
-      
+
       # debug:
       # reads.threshold = 0;  cov_cutoff = 'dynamic';
       # overwrite_tx <- TRUE ;  cleanup_tx_dir = FALSE;
       # optimize_velvet = TRUE; out.dir = tx.dir
-      # 
+      #
       tx.df <- intruderAssembly(reads.filename = reads.filename,
                                 out.dir = tx.dir,
                                 file.prefix = file.prefix,
@@ -122,9 +122,9 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
       tx.toc <- toc()
       message(paste(nrow(tx.df),'TX assembled in',
                     paste(format((tx.toc$toc - tx.toc$tic)/60,digits = 3),'minutes')))
-      
+
    } else if (file.exists(tx.df.filename) ) {
-      
+
       try(tx.df <- read.table(file = tx.df.filename,header=TRUE,as.is=TRUE,sep=','))
       message('Loaded ',nrow(tx.df), ' assembled transcripts from ',tx.df.filename,'.')
    } else if (file.exists(tx.df_tmp.filename)){
@@ -133,20 +133,20 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    }
    tx.df <- tx.df[order(tx.df$DNA_eventId,tx.df$tx_num),]
    output[['tx.df']] <- tx.df
-   
+
    ## call BLAT, blatToGRange ------
-   
+
    blat.gr = GRanges()
-   
-   
+
+
    if (nrow(tx.df) > 0) {
       blat.dir <- file.path(out.dir,'blat')
       if (!dir.exists(blat.dir)){dir.create(blat.dir)}
       #tx.df.hits <- tx.df[tx.df$geneA_match > 1 | tx.df$geneB_match > 1,]
-      
-      
+
+
       blat_filename <- file.path(blat.dir,paste(file.prefix,'_junction_tx.rds',sep=''))
-      
+
       if (overwrite_blat | !file.exists(blat_filename)){
          tx.ss <- DNAStringSet(tx.df$TX,use.names = TRUE)
          names(tx.ss) <- tx.df$tx_num
@@ -160,7 +160,7 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
          blat.gr <- suppressWarnings(blatToGRange(blat.df = blat.df,tx.df = tx.df))
          blat.gr$event <- as.numeric(unlist(regmatches(blat.gr$query,gregexpr('(?<=J_)\\d+(?=_Loc)',blat.gr$query,perl=TRUE))))
          blat.gr <- blat.gr[order(blat.gr$event,blat.gr$query,blat.gr$query_start)]
-         
+
          dt <- toc()
          message('BLAT results filtered in ',format((dt$toc - dt$tic)/60,digits = 3),' minutes; ',format(x = (dt$toc - dt$tic)/nrow(tx.df),digits = 3),' seconds per TX.\n')
          blat_file <- file(blat_filename)
@@ -168,25 +168,25 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
          close(blat_file)
       } else {
          blat.gr <- readRDS(blat_filename)
-         
+
       }
-      
-      
+
+
       output[['blat.gr']] <- blat.gr
       tx.df$blat <- tx.df$tx_num %in% blat.gr$query
    }
-   
-   
+
+
    ## Writing junction + TX plots ----
    if (overwrite_plots){
-      
+
       event_list <- unique(blat.gr$event)
-      
+
       for (event in event_list){
          e_tx.gr = blat.gr[grepl(paste('J',event,'',sep='_'),blat.gr$query) ]#& grepl('merged',blat.gr$query)]
          e_seq.df <- seq.df[seq.df$DNA_eventId == event,]
          # e_tx.df <- tx.df[tx.df$DNA_eventId == event & tx.df$kmer_size == 'merged',]
-         
+
          plot_event <- TRUE
          # overwrite_plots <- TRUE
          if (length(e_tx.gr) > 0 & plot_event ){ # TODO : check cases where |tx.gr|==0
@@ -196,7 +196,7 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
             a_pdf_filename <- file.path(tx_dir,'regionAplot.pdf')
             if (!file.exists(a_pdf_filename) | file.size(a_pdf_filename) <= 3611){
                message(event,' A')
-               
+
                A.gr <- unique(GRanges(seqnames = e_seq.df[,'chrA'],ranges = IRanges(start = e_seq.df[,'posAmin'],end = e_seq.df[,'posAmax'])))
                pdf(a_pdf_filename)
                # debug: tx.gr = e_tx.gr;pos.gr = A.gr
@@ -204,14 +204,14 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
                #plotTracks(atrack)
                dev.off()
             }
-            
+
             # TODO: return debug info on which events cause errors here
             # TODO: modify plotJunctionTX so it has functional default behavior if e_tx.gr is empty
-            
+
             # plot region A
-            
+
             #debug: tx.gr = e_tx.gr; pos.gr = A.gr; highlight = TRUE;collapse = 'longest'
-            
+
             # plot region B
             b_pdf_filename <- file.path(tx_dir,'regionBplot.pdf')
             if (!file.exists(b_pdf_filename) | file.size(b_pdf_filename) <= 3611){
@@ -225,9 +225,9 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
          }
       }
    }
-   
+
    ## Write protein ref by exon ----
-   
+
    message('Using blat results to generate reference proteome files...')
    # debug: overwrite_ref = FALSE; overwrite_plots = FALSE; overwrite_np = TRUE
    # out.dir <- file.path(ppdir,'dev')
@@ -240,9 +240,9 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    } else if (!dir.exists(np_ref.dir)){
       dir.create(np_ref.dir)
    }
-   
+
    event_list <- unique(blat.gr$event)
-   
+
    make_hash_table <- FALSE
    message('Writing protein reference .fa files for ',length(event_list),' events...')
    for (event in event_list){
@@ -251,9 +251,9 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
       e_prot_ref_fa_filename <- file.path(np_ref.dir,paste('event',event,'prot_ref.fa',sep='_'))
       e_prot_hash_rds_filename <- file.path(np_ref.dir,paste('event',event,'prot_ref_hash.rds',sep='_'))
       if (length(e_tx.gr) > 0 && (!file.exists(e_prot_ref_fa_filename) | overwrite_ref)){
-         
+
          suppressMessages(suppressWarnings(protOut <- getProtExonSeq(e_tx.gr = e_tx.gr)))
-         
+
          e_ref_prot <- unique(protOut$gene_prot)
          if (length(e_ref_prot) ==0  ){
             message('No CDS overlaps for event ',event)
@@ -268,51 +268,51 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
                saveRDS(object = hash.tab,file = hash_file)
                close(hash_file)
             }
-            
-            
+
+
             writeXStringSet(x = e_ref_prot,filepath = e_prot_ref_fa_filename)
          }
-         
+
       } else if (length(e_tx.gr) == 0 & file.exists(e_prot_ref_fa_filename)){
          message('No CDS overlaps for event ',event)
          unlink(e_prot_ref_fa_filename)
          e_ref_prot <- AAStringSet()
       }
-      
+
    }
-   
-   
+
+
    # debug polyA_threshold = 15; min_length_novel = 2; merged_tx_only = TRUE;
    # Neopeptide Prediction ------
    neopep_fa_file <- file.path(np.dir,paste(file.prefix,'_neopeptides.fa',sep=''))
    orf_csv_file <- file.path(np.dir,paste(file.prefix,'_orfs.csv',sep=''))
    neopep_csv_file <- file.path(np.dir,paste(file.prefix,'_neopeptides.csv',sep=''))
-   
+
    tx_log_filename <- file.path(np.dir,paste(file.prefix,'TX_to_NP_log.csv',sep='_'))
-   
-   
-   
+
+
+
    if (nrow(tx.df) > 0 & (!file.exists(orf_csv_file) | overwrite_np)){
       ## call intruderPep ----
-      #defaults: min_length_novel <- 2; polyA_threshold <- 15; 
-      # 
+      #defaults: min_length_novel <- 2; polyA_threshold <- 15;
+      #
       # if (!dir.exists(np.dir)){dir.create(np.dir)}
-      # 
+      #
       intruderPep.out <- intruderPep(tx.df = tx.df,
                                      blat.gr = blat.gr,
                                      out.dir = out.dir,
                                      file.prefix = file.prefix,
                                      blat.filter = FALSE)
-      
+
       np.df <- intruderPep.out[['np.df']]
       orf.df <-  intruderPep.out[['orf.df']]
       output[['np.df']] <- np.df
-      
-      
+
+
       ## Modify tx.df with np_output -----
       tx.df$np_output <- intruderPep.out[['tx_log']]
-      
-      
+
+
       # Modify orf.df with seq info ----
       orf.df$breakpointA <- character(nrow(orf.df))
       orf.df$breakpointB <- character(nrow(orf.df))
@@ -326,13 +326,13 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
          } else {
             orf.df[i_orf,'breakpointA'] <- paste('chr',chrA,':',bpA,sep='',collapse=';')
          }
-         
+
          if (length(bpA) == 1){
             orf.df[i_orf,'breakpointB'] <- paste('chr',chrB,':',bpB,sep='')
          } else {
             orf.df[i_orf,'breakpointB'] <- paste('chr',chrB,':',bpB,sep='',collapse=';')
          }
-         
+
       }
       # if (nrow(tx.df) > 0){
       #    tx.df.filename <- ''
@@ -367,27 +367,27 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    event.df$ORF_n9mers <- numeric(length = nrow(event.df))
    event.df$NP_n9mers <- numeric(length = nrow(event.df))
    if (anyDuplicated(event.df$DNA_eventId) != 0){event.df <- event.df[!duplicated(event.df$DNA_eventId),]}
-   
-   
+
+
    for (i in 1:nrow(event.df)){
       event.df[i,'breakpointA'] <- convertGenomicVectorToString(chr = unique(seq.df$chrA[seq.df$DNA_eventId == event.df[i,'DNA_eventId']]),
                                                                 pos = floor(mean(seq.df$DNA_posA[seq.df$DNA_eventId == event.df[i,'DNA_eventId']])))
       event.df[i,'breakpointB'] <- convertGenomicVectorToString(chr = unique(seq.df$chrB[seq.df$DNA_eventId == event.df[i,'DNA_eventId']]),
                                                                 pos = floor(mean(seq.df$DNA_posB[seq.df$DNA_eventId == event.df[i,'DNA_eventId']])))
       i_tx.df <- tx.df[tx.df$DNA_eventId == event.df$DNA_eventId[i] ,]#& tx.df$kmer_size == 'merged',]
-      
+
       i_ref_filename <- file.path(out.dir,'prot/ref',paste('event',event.df$DNA_eventId[i],'prot_ref.fa',sep='_'))
-      
-      
+
+
       event.df[i,'nTX'] <- nrow(i_tx.df)
       event.df[i,'nTX_blatHits'] <- sum(i_tx.df$tx_num %in% blat.gr$query)
-      
+
       if (file.exists(i_ref_filename)){
          event.df[i,'nRefProt'] <- sum(grepl('>',readLines(i_ref_filename))) #ie 'event_122_prot_ref.fa'
       } else {
          event.df[i,'nRefProt'] <- 0
       }
-      
+
       if (exists('orf.df')){
          event.df[i,'nORF_hits'] <- sum(orf.df$event == event.df$DNA_eventId[i])
          event.df[i,'ORF_n9mers'] <- ifelse(event.df[i,'nORF_hits']>0,length(count9mers(x = orf.df$neopep[orf.df$event == event.df$DNA_eventId[i]])),0)
@@ -399,15 +399,15 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    }
    event_csv_file <- file.path(out.dir,paste(file.prefix,'_event_summary.csv',sep=''))
    write.table(x = event.df,file = event_csv_file,quote = FALSE,col.names=TRUE,sep=',')
-   
+
    if (exists('blat.df')){output[['blat.df']] <- blat.df}
    output[['event.df']] <- event.df
    output[['tx.df']] <- tx.df
    if (exists('orf.df')){output[['orf.df']] <- orf.df}
    if (exists('np.df')){output[['np.df']] <- np.df}
-   
+
    # Create and populate case.df ----
-   
+
    rna_sampleId <- getSampleId(folderList = folderNum)
    dna_folderId <- unique(seq.df$DNA_folderId)
    dna_sampleId <- unique(seq.df$DNA_sampleId)
@@ -415,7 +415,7 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    jct_file_name <- file.path(dna_ppdir,'reports',paste(dna_sampleId,'alts_comprehensive.csv',sep='_'))
    jct_file_lines <- readLines(jct_file_name)
    jct.df <- read.delim(file = jct_file_name,skip = grep('eventId',jct_file_lines) - 1,sep=',')
-   
+
    if (is.na(maprseq.out.dir) & !is.na(folderNum)){
       maprseq.out.dir <- file.path(dirname(getPostProcessingDir(folder = folderNum)),'maprseq3')
    }
@@ -424,7 +424,7 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    output[['arriba.df']] <- arriba.df
 
    case_summary_file <- file.path(out.dir,'reports',paste(file.prefix,'intruder_out.tsv',sep='_'))
-   
+
    if (!dir.exists(file.path(out.dir,'reports'))){dir.create(file.path(out.dir,'reports'))}
    case.df <- caseSummary(file.prefix = file.prefix,
                           tx.df = tx.df,
@@ -441,7 +441,7 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
    output[['arriba.df']] <- arriba.df
    output[['jct.df']] <- jct.df
    output[['geneExpression.df']] <- geneExpression.df
-   
+
    saveRDS(output,file = file.path(out.dir,paste(file.prefix,'.rds',sep='')))
    return(output)
 }
@@ -449,12 +449,12 @@ intruderPipe <- function(reads.filename,file.prefix,out.dir,
 blat <- function(stringset,filename,directory,
                  ref_stringset = gen_ref_path,
                  allow_small_segments = FALSE){
-   # debug 
+   # debug
    # blat.dir <- file.path(out.dir,'blat');    filename = file.prefix;
    # tx.ss <- DNAStringSet(tx.df$TX,use.names = TRUE) ;   tx.df.names <- tx.df$tx_num;   names(tx.ss) <- tx.df.names
    # stringset = tx.ss; filename = file.prefix;directory = blat.dir
-   
-   
+
+
    if (allow_small_segments) {
       ref_input <- paste(directory,'/',filename,'.fa',sep = '')
       writeXStringSet(ref_stringset,ref_input,append=FALSE,format='fasta')
@@ -464,7 +464,7 @@ blat <- function(stringset,filename,directory,
       # system(faTo2bit.cmd)
    }
    reference_path <- gen_ref_path
-   
+
    infile <- paste(directory,'/',filename,'.in',sep = '')
    outfile <- paste(directory,'/',filename,'.psl',sep = '')
    writeXStringSet(stringset, infile, append = FALSE, format = "fasta")
@@ -484,7 +484,7 @@ blat <- function(stringset,filename,directory,
       names(blat_results) <- c('query','chr','percent_id','alignment_length','mismatches','gap_o',
                                'query_start','query_end','subject_start','subject_end','E_value','bit_score')
    }
-   
+
    blat_results$strand <- ifelse(blat_results$subject_end - blat_results$subject_start > 0,'+','-')
    # for (j in unique(ss_names)) {
    #   j.df <- blat_results[blat_results$query == j,]
@@ -510,7 +510,7 @@ blatToGRange <- function(blat.df,tx.df,
    narrowBy = 6
    blat.gr <- GRanges()
    event_list <- unique(tx.df$DNA_eventId)
-   
+
    for (i_event in event_list) {
       #message(j)
       tx_list <- unique(as.character(tx.df$tx_num[tx.df$DNA_eventId == i_event]))
@@ -519,13 +519,13 @@ blatToGRange <- function(blat.df,tx.df,
          tx_idx <- which(tx.df$DNA_eventId == i_event & tx.df$tx_num == i_tx)
          tx_length <- unique(tx.df[tx_idx,'tx_length'])
          tx_conf <- unique(tx.df[tx_idx,'tx_conf'])
-         
+
          if (processAsReads) {
             query_name <- paste(i_event,i_tx,sep = '_')
          } else if (!grepl('event',i_tx)){
             query_name <- i_tx #paste('event',formatC(j,width = 3,flag = '0'),t,sep = '_')
          } else {query_name <- i_tx}
-         
+
          if (any(grepl('chr',blat.df$chr))){
             chrA <- paste('chr',unique(tx.df$chrA[tx_idx]),sep='')
             chrB <- paste('chr',unique(tx.df$chrB[tx_idx]),sep='')
@@ -533,19 +533,19 @@ blatToGRange <- function(blat.df,tx.df,
             chrA = unique(tx.df$chrA[tx_idx])
             chrB = unique(tx.df$chrB[tx_idx])
          }
-         
-         unfiltered_blat_hits <- unique(blat.df[blat.df$query == query_name & 
+
+         unfiltered_blat_hits <- unique(blat.df[blat.df$query == query_name &
                                                    blat.df$chr %in% c(chrA,chrB),])
-         
-         blat_hits <- unique(blat.df[blat.df$query == query_name & 
-                                        blat.df$chr %in% c(chrA,chrB) & 
-                                        blat.df$percent_id >= percent_id & 
+
+         blat_hits <- unique(blat.df[blat.df$query == query_name &
+                                        blat.df$chr %in% c(chrA,chrB) &
+                                        blat.df$percent_id >= percent_id &
                                         blat.df$alignment_length > 2*narrowBy &
                                         blat.df$mismatches <= blat.df$alignment_length*0.1,])
          # blat.gr <- GRanges()
          if (nrow(blat_hits) > 0){
             blat_hits$map_cov <- blat_hits$alignment_length/tx_length
-            
+
             # call blatFilter ----
             #debug: blat_hits = blat_hits;map_cov_cutoff = map_cov_cutoff;tx_length = tx_length
             blatFilter_out.gr <- blatFilter(blat_hits = blat_hits,
@@ -553,17 +553,17 @@ blatToGRange <- function(blat.df,tx.df,
                                             tx_length = tx_length,
                                             narrowBy = narrowBy)
          }
-         
+
          blat.gr <- c(blat.gr,blatFilter_out.gr)
-         
-         
-         
-         
+
+
+
+
       }
    }
    blat.gr$chr = as.character(seqnames(blat.gr))
    miss_list <- tx.df$tx_num[!tx.df$tx_num %in% unique(mcols(blat.gr)[,'query'])]
-   if (length(miss_list) > 0){message(paste('Couldn\'t find hits covering ',map_cov_cutoff*100,'% of tx for ', 
+   if (length(miss_list) > 0){message(paste('Couldn\'t find hits covering ',map_cov_cutoff*100,'% of tx for ',
                                             length(miss_list),' queries/TX, ',format(length(miss_list)/nrow(tx.df)*100,digits = 3),'% of total.',sep = ''))}
    return(blat.gr)
 }
@@ -576,8 +576,8 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
    blat_hits$old_chr <- blat_hits$chr
    blat_hits$chr <- 42
    # narrowBy <- 6
-   
-   
+
+
    nHits = 0
    blat.gr <- GRanges()
    if (nrow(blat_hits) == 1) {
@@ -587,22 +587,22 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
       filtered_output <- blat_hits
       nHits = 1
       # }
-      
-      
+
+
    } else if (length(blat_hits) > 1) {
-      
+
       blat_sort <- order(blat_hits$bit_score,decreasing = TRUE)
       blat_hits <- blat_hits[blat_sort,]
-      
-      
+
+
       if (!any(countOverlaps(makeGRangesFromDataFrame(blat_hits,start.field = 'query_start',end.field = 'query_end')) > 1) &
           abs(sum(blat_hits$alignment_length) - tx_length) / tx_length < (1 - map_cov_cutoff)) {
          filtered_output <- blat_hits
          nHits <- nrow(blat_hits)
       } else  { # if blat_hits doesn't meet map_cov_cutoff threshold
-         
+
          nHits <- 0
-         
+
          top_hits <- makeGRangesFromDataFrame(blat_hits[1,],
                                               start.field='query_start',
                                               end.field='query_end',
@@ -618,16 +618,16 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
          #remainders <- remainders
          cum_map_cov <- abs(sum(width(top_hits))) / tx_length
          if (length(remainders) > 0){
-            while (length(remainders) > 0 & 
-                   cum_map_cov < map_cov_cutoff & 
+            while (length(remainders) > 0 &
+                   cum_map_cov < map_cov_cutoff &
                    sum(width(top_hits)) < tx_length
             ){
-               
-               
+
+
                top_hits <- c(top_hits,remainders[1])
                new_cum_map_cov <- abs(sum(width(top_hits))) / tx_length
                remainders <- subsetByOverlaps(x = remainders,ranges = top_hits-narrowBy,invert=TRUE,ignore.strand=TRUE)
-               
+
                if (new_cum_map_cov >= map_cov_cutoff | length(remainders) == 0) {
                   nHits <- length(top_hits)
                   filtered_output <- as.data.frame(top_hits)
@@ -637,15 +637,15 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
                   #   filtered_output[i,'old_chr'] <- blat_hits_input[blat_hits$query == filtered_output[i,'query'],'chr']
                   # }
                   # filtered_output$old_chr <- blat_hits$old_chr
-                  
-                  
-                  
+
+
+
                   break
-               } 
-               
+               }
+
                cum_map_cov <- new_cum_map_cov
                #remainders <- remainders[width(remainders) <= tx_length - sum(width(top_hits)) + 3 + 1]
-               
+
             }
          } else if (length(remainders) == 0 ){
             nHits <- length(top_hits)
@@ -653,21 +653,21 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
             filtered_output$query_start <- blat_hits$start
             filtered_output$query_end <- blat_hits$end
          }
-         
-         
+
+
          if (nHits == 0) {
             #miss_list <- c(miss_list,query_name)
-            
+
             filtered_output <- data.frame()
          } #else {blat_hits <- blat_hits[1:nHits,]}
       } # if first element or all blat_hits meets map_cov_cutoff threshold after simple QC, no further modification needed
       if (nHits == 0){
          filtered_output <- data.frame()
       }
-      
-      
+
+
    }
-   
+
    if(nHits  == 0) {
       return(NULL)
    } else {
@@ -685,12 +685,12 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
          filtered_output$query_start <- filtered_output$start
          filtered_output$query_end <- filtered_output$end
       }
-      
-      
+
+
       filtered_output$start <- filtered_output$subject_start
       filtered_output$end <- filtered_output$subject_end
       filtered_output <- filtered_output[order(filtered_output$query_start),]
-      #filtered_output$query_start <- 
+      #filtered_output$query_start <-
       if (any(filtered_output$start > filtered_output$end)){
          filtered_output[filtered_output$start > filtered_output$end,c('start','end')] <- filtered_output[filtered_output$start > filtered_output$end,c('end','start')]
       }
@@ -704,13 +704,13 @@ blatFilter <- function(blat_hits,tx_length,narrowBy = 6,map_cov_cutoff = .99){
                                           keep.extra.columns = TRUE)
       blat.gr$query_map_cov <- sum(blat.gr$map_cov)
       blat.gr <- blat.gr[order(blat.gr$query,blat.gr$query_start),]
-      
+
    }
-   
-   
+
+
    #else {blat.gr <- GRanges()}
    return(blat.gr)
-   
+
 }
 
 getProtExonSeq <- function(e_tx.gr){
@@ -718,58 +718,58 @@ getProtExonSeq <- function(e_tx.gr){
    if (length(e_tx.gr) == 0){
       return(list('gene_prot' = AAStringSet()))
    }
-   
+
    cds.full.gr <- unlist(cdsBy(x = edb.ucsc,
                                by = 'tx',
                                filter = GRangesFilter(value = c(e_tx.gr,invertStrand(e_tx.gr)),type = 'any'),
                                columns = c('gene_name','protein_id','exon_idx','tx_id','tx_biotype')))
-   
+
    cds.gr <- GRanges()
    if (length(cds.full.gr) > 0){
       cds.gr = subsetByOverlaps(x = cds.full.gr,ranges = e_tx.gr + 2000,ignore.strand = TRUE)
       cds.gr <- cds.gr[!grepl('LRG_',names(cds.gr))]
    }
-   
+
    plot_cds <- FALSE
    if (plot_cds & length(cds.gr) > 0){
       tx_id_nums <- Rle(names(cds.gr)); runValue(tx_id_nums) <- 1:length(runValue(tx_id_nums))
       cds.gr$tx_num <- as.vector(tx_id_nums)
       cds.gr$tx_id <- names(cds.gr)
-      
+
       for (i_chr in unique(seqnames(cds.gr))){
          x.gr <- cds.gr[seqnames(cds.gr) == i_chr]
          ggplot(data = x.gr) + geom_arrowrect(aes(color=tx_biotype,fill=gene_name,y = tx_num),
                                               stat = 'identity') + scale_y_discrete(name = 'Ensembl tx_id',breaks = names(x.gr))
       }
    }
-   
+
    proteins <- data.frame()
-   
+
    gene_prot <- AAStringSet()
    cds.pa <- GRanges()
    if (length(cds.gr) > 0) {
-      
-      
-      
+
+
+
       unique_cds.gr <- GRangesList()
-      
+
       use_flank <- FALSE
-      
+
       if (use_flank){
          cds_plus_flank.gr <- GRanges()
          for (i_cds in 1:length(cds.gr)){
             ex_net_radius <- 2
-            cds_plus_flank.gr <- c(flanking_cds.gr,cds.full.gr[cds.full.gr$protein_id == 
-                                                                  mcols(cds.gr)[i_cds,'protein_id'] & 
-                                                                  abs(cds.full.gr$exon_rank - mcols(cds.gr)[i_cds,'exon_rank']) < 
+            cds_plus_flank.gr <- c(flanking_cds.gr,cds.full.gr[cds.full.gr$protein_id ==
+                                                                  mcols(cds.gr)[i_cds,'protein_id'] &
+                                                                  abs(cds.full.gr$exon_rank - mcols(cds.gr)[i_cds,'exon_rank']) <
                                                                   ex_net_radius,])
          }
          try(unique_cds.gr <- unique(cds_plus_flank.gr))
       } else {
          try(unique_cds.gr <- unique(cds.gr))
       }
-      #full_protAnnotation <-  suppressWarnings(unlist(genomeToProtein(x = exons.gr,edb.ucsc))) 
-      
+      #full_protAnnotation <-  suppressWarnings(unlist(genomeToProtein(x = exons.gr,edb.ucsc)))
+
       gene_name <- unique(cds.gr$gene_name)
       #exon_tx_ol.gr <- subsetByOverlaps(ranges = tx.gr,x = exons.gr,ignore.strand  = TRUE)
       #unique_prot <- unique(exon_tx_ol.gr$protein_id)
@@ -779,39 +779,39 @@ getProtExonSeq <- function(e_tx.gr){
       } else {
          cds_unfiltered.pa <- suppressWarnings(unlist(genomeToProtein(x = cds.gr,edb.ucsc)))
       }
-      
+
       cds_filtered.pa <- cds_unfiltered.pa[mcols(cds_unfiltered.pa)[,'tx_id'] %in% names(cds.gr)]
       if (!is.null(names(cds_filtered.pa))){
          mcols(cds_filtered.pa)[,'protein_id'] <- names(cds_filtered.pa)
       }
-      
+
       for (i_cds in which(start(cds_filtered.pa) == -1)){
          cds.pid <- unique(mcols(cds.gr[names(cds.gr) == mcols(cds_filtered.pa)[i_cds,'tx_id']])[,'protein_id'])
          if (length(cds.pid) == 1){
             cds_prot_matches.prot <- proteins(edb.ucsc,filter = ProteinIdFilter(cds.pid))
             cds_prot_matches.prot$length <- nchar(cds_prot_matches.prot$protein_sequence)
-            
-            upstream_exon.gr <- cds.full.gr[cds.full.gr$protein_id == cds.pid & 
+
+            upstream_exon.gr <- cds.full.gr[cds.full.gr$protein_id == cds.pid &
                                                cds.full.gr$exon_rank == (mcols(cds_filtered.pa)[i_cds,'exon_rank'] - 1)]
-            
+
             prot_cds.gr <- cds.full.gr[cds.full.gr$protein_id == cds.pid]
-            
+
             if (length(upstream_exon.gr) > 0){
-               
+
                suppressWarnings(upstream_exon.pa <- unlist(genomeToProtein(x = upstream_exon.gr,db = edb.ucsc)))
                if (!is.null(names(upstream_exon.pa))){
                   mcols(upstream_exon.pa)[,'protein_id'] <- names(upstream_exon.pa)
                   upstream_exon.pa <- upstream_exon.pa[mcols(upstream_exon.pa)[,'protein_id'] == cds.pid]
-                  
-                  
+
+
                   if (length(upstream_exon.pa) > 0 && end(upstream_exon.pa) < cds_prot_matches.prot$length){
                      pid.ir <- IRanges(start = end(upstream_exon.pa) + 1,end= cds_prot_matches.prot$length)
                      names(pid.ir) <- cds_prot_matches.prot$protein_id
                      #rev_cds_from_prot.pa <- GRanges()
                      try(rev_cds_from_prot.pa <- unlist(proteinToGenome(x = pid.ir,db = edb.ucsc))[[cds.pid]])
-                     rev_cds_check <- length(rev_cds_from_prot.pa) > 0 && 
+                     rev_cds_check <- length(rev_cds_from_prot.pa) > 0 &&
                         !any(mcols(cds_filtered.pa)[,'exon_id'] == mcols(rev_cds_from_prot.pa)[,'exon_id'] & start(cds_filtered.pa) != -1)
-                     
+
                      if (rev_cds_check){
                         if (mcols(rev_cds_from_prot.pa)[,'tx_id'] == mcols(cds_filtered.pa)[i_cds,'tx_id'] &
                             mcols(rev_cds_from_prot.pa)[,'exon_rank'] == mcols(cds_filtered.pa)[i_cds,'exon_rank']){
@@ -821,28 +821,28 @@ getProtExonSeq <- function(e_tx.gr){
                            mcols(cds_filtered.pa)[i_cds,'protein_id'] <- cds.pid
                         }
                      }
-                     
-                     
+
+
                   }
                }
             }
          }
-         
-         
-         
+
+
+
       }
-      
-      
-      
+
+
+
       if (length(cds_filtered.pa) > 0 & 'protein_id' %in% names(mcols(cds_filtered.pa))){
          if (any(names(cds_filtered.pa) == '' & mcols(cds_filtered.pa)[,'protein_id'] != '')){
             names(cds_filtered.pa) <-  mcols(cds_filtered.pa)[,'protein_id']
          }
          cds.pa <- cds_filtered.pa[start(cds_filtered.pa) != -1]
-      } 
-      
+      }
+
       if (length(cds.pa) > 0){
-         
+
          for (i_cds in 1:length(cds.pa)){
             i_exon_id <- mcols(cds.pa)[['exon_id']][i_cds]
             name_match <- unique(cds.gr$gene_name[ cds.gr$exon_id == i_exon_id])
@@ -853,13 +853,13 @@ getProtExonSeq <- function(e_tx.gr){
             } else {
                mcols(cds.pa)[['gene_name']][i_cds] <- name_match
             }
-            
+
          }
-         
+
          prot_ids <- mcols(cds.pa)[,'protein_id']
          names(cds.pa) <- mcols(cds.pa)[,'protein_id']
-         proteins <- as.data.frame(proteins(edb.ucsc, 
-                                            columns = c("gene_name","protein_id","protein_sequence"), 
+         proteins <- as.data.frame(proteins(edb.ucsc,
+                                            columns = c("gene_name","protein_id","protein_sequence"),
                                             filter = ProteinIdFilter(prot_ids)),stringsAsFactors = FALSE)
          # if (length(unique(names(cds.pa)))> 1){
          #    message(print(tx_name,'has multiple genes matching its protein annotation! wwwhhhoooooaaaaaa'))
@@ -868,17 +868,17 @@ getProtExonSeq <- function(e_tx.gr){
          #                                                  start = start(cds.pa),end=end(cds.pa))
          # }
          #prot_ids <- unique(names(cds.pa))
-         
+
          # gene_prot <- AAStringSet()
          if (length(prot_ids) == 1){
             gene_prot <- protToExonSeqs(cds.pa,proteins,prot_ids)
-            
+
          } else if (length(prot_ids) > 1){
             #gene_prot <- AAStringSet()
             for (prot in prot_ids){
                # call protToExonSeqs() ----
                # cds.pa <- cds.pa; prot = prot_ids[1]
-               
+
                prot.ss <- protToExonSeqs(cds.pa,proteins,prot)
                #prot.ss <- unique(prot.ss)
                if (length(gene_prot) == 0){
@@ -886,25 +886,25 @@ getProtExonSeq <- function(e_tx.gr){
                } else if (length(prot.ss) > 0){gene_prot <- c(gene_prot,prot.ss)}
             }
             gene_prot <- unique(gene_prot)
-            
+
             # TODO: handle fusion cases of protein annotation
          } else if (length(prot_ids) == 0){
             message('No matching proteins found.')
             #gene_prot = getUniprotSeq(gene_list,pe_filtered = TRUE)
          }
       }
-      
-      
+
+
    } else if (length(cds.gr) == 0) {
       message('No CDS overlaps found.')
       #gene_prot <- getUniprotSeq(gene_list,pe_filtered = TRUE)
    }
-   
+
    if (length(gene_prot) > 0){
       gene_prot <- unique(gene_prot)
       gene_prot[width(gene_prot) <= 9] <- NULL
    }
-   
+
    return(list('gene_prot' = gene_prot,'cds.pa' = cds.pa,'proteins' = proteins))#,'exons.gr' = exons.gr))
    #return(gene_prot)
 }
@@ -918,7 +918,7 @@ get5pUTRbyOverlap <- function(tx.gr){ #output:  fivePrimeUTR.gr
    fivePrimeUTR.gr <- GRanges()
    if (length(fputr.grl) > 0){
       for (i_np in 1:length(fputr.grl)){
-         
+
          if (unique(strand(fputr.grl[[i_np]]))=='+'){
             last.gr <- fputr.grl[[i_np]][end(fputr.grl[[i_np]]) == max(end(fputr.grl[[i_np]]))]
             utr_end.gr <- GRanges(seqnames = seqnames(last.gr),ranges = IRanges(start = end(last.gr),end = end(last.gr) + 1),strand = strand(last.gr))
@@ -929,10 +929,10 @@ get5pUTRbyOverlap <- function(tx.gr){ #output:  fivePrimeUTR.gr
             mcols(utr_end.gr) <- mcols(last.gr)
          }
          if (length(fivePrimeUTR.gr) == 0){fivePrimeUTR.gr <- utr_end.gr} else {fivePrimeUTR.gr <- c(fivePrimeUTR.gr,utr_end.gr)}
-         
+
       }
    }
-   
+
    return(fivePrimeUTR.gr)
 }
 
@@ -944,9 +944,9 @@ getPromotersByOverlap <- function(tx.gr){
                                  use.names = TRUE,
                                  columns = c('gene_name','protein_id'),
                                  filter = GRangesFilter(c(tx.gr,invertStrand(tx.gr)),type = 'any')))
-   if (length(promoters.gr) > 0){promoters.gr <- promoters.gr[!is.na(promoters.gr$protein_id)]} 
+   if (length(promoters.gr) > 0){promoters.gr <- promoters.gr[!is.na(promoters.gr$protein_id)]}
    return(promoters.gr)
-} 
+}
 
 getBreakpointByOverlap <- function(tx.gr){
    breakpoint.gr <- GRanges()
@@ -969,14 +969,14 @@ getBreakpointByOverlap <- function(tx.gr){
       }
       cds.full.gr <- unlist(cds.tmp.list); cds.full.gr <- cds.full.gr[!grepl('LRG_',cds.full.gr$protein_id) ]
       cds.ss.gr <- unlist(cds.tmp.list[!cds_mask_list]); cds.ss.gr <- cds.ss.gr[!grepl('LRG_',cds.ss.gr$protein_id) ]
-      
-      
+
+
       cds.tmp <- cds.ss.gr
    } else {cds.tmp <- GRanges()}
-   
-   
-   
-   
+
+
+
+
    # dj_exons.gr <- disjointExons(x = edb.ucsc,
    #                              filter = AnnotationFilterList(GRangesFilter(value = cds.tmp,type = 'any'),
    #                                                            ProteinIdFilter(unique(cds.tmp$protein_id))),
@@ -987,44 +987,44 @@ getBreakpointByOverlap <- function(tx.gr){
    #    dj_exons.gr$gene_name[i] <- unique(cds.tmp[cds.tmp$gene_id == unlist(dj_exons.gr$gene_id[i])]$gene_name)
    #    # dj_exons.gr$
    # }
-   
+
    if (length(cds.tmp) > 0){
-      
-      
-      
-      
-      
+
+
+
+
+
       cds_ol_tx.gr <- subsetByOverlaps(x = cds.tmp,ranges = tx.gr,ignore.strand = TRUE,type = 'any')
       tx_ol_cds.gr <- subsetByOverlaps(ranges = cds.tmp,x = tx.gr,ignore.strand = TRUE,type = 'any')
-      
+
       # tx_within_cds.gr <- subsetByOverlaps(ranges = cds.tmp,x = tx.gr,ignore.strand = TRUE,type = 'any')
       tx_ol_cds.gr$mid_exon_break <- logical(length = length(tx_ol_cds.gr))
       tx_ol_cds.gr$break_gene <- character(length = length(tx_ol_cds.gr))
       #tx_ol_cds.gr$break_exon <- character(length = length(tx_ol_cds.gr))
-      
+
       if (length(tx_ol_cds.gr) > 0){
          for (i_np in 1:length(tx_ol_cds.gr)){
-            
-            
-            
+
+
+
             matching_cds.gr <- subsetByOverlaps(x = cds.tmp,
                                                 ranges = tx_ol_cds.gr[i_np],
                                                 ignore.strand = TRUE)
             if (length(unique(matching_cds.gr)) > 1 & length(unique(matching_cds.gr$gene_name)) == 1){
-               
-               
-               
+
+
+
                matching_cds_superset_range <- range(matching_cds.gr)
                matching_cds.gr <- matching_cds.gr[ranges(matching_cds.gr) == ranges(matching_cds_superset_range)]
             }
-            
-            fw_strand_ds_exon_break_flag <- as.character(strand(matching_cds.gr)) == '+' & 
+
+            fw_strand_ds_exon_break_flag <- as.character(strand(matching_cds.gr)) == '+' &
                abs(end(matching_cds.gr) - end(tx_ol_cds.gr[i_np])) > 2
-            
+
             rev_strand_ds_exon_break_flag <- as.character(strand(matching_cds.gr)) == '-' &
-               abs(start(tx_ol_cds.gr[i_np]) - start(matching_cds.gr)) > 2 
+               abs(start(tx_ol_cds.gr[i_np]) - start(matching_cds.gr)) > 2
             # tx_ol_cds.gr$exon_hit[i] <- paste()
-            
+
             ol_flag <- any(fw_strand_ds_exon_break_flag,rev_strand_ds_exon_break_flag)
             if (!ol_flag %in% c(TRUE,FALSE)){
                ol_flag <- FALSE
@@ -1034,11 +1034,11 @@ getBreakpointByOverlap <- function(tx.gr){
             if (ol_flag){
                tx_ol_cds.gr$break_gene[i_np] <- paste(unique(matching_cds.gr$gene_name[fw_strand_ds_exon_break_flag | rev_strand_ds_exon_break_flag]),collapse='; ')
             }
-            
+
          }
          tx_ol_cds.gr <- tx_ol_cds.gr[tx_ol_cds.gr$mid_exon_break]
       }
-      
+
       breakpoint.gr <- GRanges()
       if (length(tx_ol_cds.gr) > 0){
          for (i_np in 1:length(tx_ol_cds.gr)){
@@ -1047,7 +1047,7 @@ getBreakpointByOverlap <- function(tx.gr){
                                                 ignore.strand = TRUE)
             cds_strand <- as.character(unique(strand(matching_cds.gr)))
             if (cds_strand == '+' ){
-               
+
                message('TX ',unique(tx.gr$query),': Incomplete exon mapping found in ',
                        paste(unique(tx_ol_cds.gr[i_np]$break_gene),collapse=' and '),'.')
                i_breakpoint.gr <- GRanges(seqnames = seqnames(tx_ol_cds.gr[i_np]),
@@ -1058,18 +1058,18 @@ getBreakpointByOverlap <- function(tx.gr){
             } else if ( cds_strand == '-'){
                message('TX ',unique(tx.gr$query),': Incomplete exon mapping found in ',
                        paste(unique(tx_ol_cds.gr[i_np]$break_gene),collapse=' and '),'.')
-               
+
                i_breakpoint.gr <- GRanges(seqnames = seqnames(tx_ol_cds.gr[i_np]),
                                           ranges = IRanges(start = start(tx_ol_cds.gr[i_np]),end = start(tx_ol_cds.gr[i_np]) + 1))
                mcols(i_breakpoint.gr) <- mcols(tx_ol_cds.gr[i_np])
                breakpoint.gr <- c(breakpoint.gr,i_breakpoint.gr)
-            } 
+            }
          }
       }
    } else { # if no CDS matches found
       breakpoint.gr <- GRanges()
    }
-   
+
    return(breakpoint.gr)
 }
 
@@ -1085,7 +1085,7 @@ protToExonSeqs <- function(cds.pa,proteins,prot_id){
    i_cds.pa <- unique(cds.pa[names(cds.pa) == prot_id,])
    i_cds.pa <- i_cds.pa[order(start(i_cds.pa),decreasing = FALSE)]
    prot_exons <- exons(x = edb.ucsc,filter = ProteinIdFilter(prot_id),columns = c('exon_idx'))
-   
+
    if ( length(i_cds.pa) > 1 &&  length(i_cds.pa) > length(unique(mcols(i_cds.pa)[['exon_id']]))){
       rm_mask <- logical(length = length(i_cds.pa))
       for (i_np in 1:length(i_cds.pa)){
@@ -1094,7 +1094,7 @@ protToExonSeqs <- function(cds.pa,proteins,prot_id){
       }
       i_cds.pa <- i_cds.pa[!rm_mask, ]
    }
-   
+
    #prot_seq_by_exon <- unlist(genomeToProtein(x = prot_exons,db = edb.ucsc))
    #prot_seq_by_exon <- prot_seq_by_exon[names(prot_seq_by_exon) == prot_id & start(prot_seq_by_exon) != -1,]
    n = length(i_cds.pa)
@@ -1103,9 +1103,9 @@ protToExonSeqs <- function(cds.pa,proteins,prot_id){
       return(gene_prot)
    } else if (n > 1){
       gene_name <- unique(mcols(i_cds.pa)[['gene_name']])
-      
+
       for (n_ex in 1:n){
-         
+
          for (i_ex_start in 1:(n - n_ex + 1)){
             i_subset <- i_ex_start:(i_ex_start + n_ex - 1)
             new_prot <- AAStringSet(x = subseq(x = fullProtSeq,
@@ -1114,12 +1114,12 @@ protToExonSeqs <- function(cds.pa,proteins,prot_id){
             names(new_prot) <- paste(gene_name,':x',paste(mcols(i_cds.pa)[['exon_rank']][i_subset],collapse='.'),'_',prot_id,sep='')
             if (length(gene_prot) > 0){gene_prot <- c(gene_prot,new_prot)} else {gene_prot <- new_prot}
          }
-         
-         
+
+
       }
-      
-      
-      
+
+
+
    } else { # n = 1
       gene_name <- unique(mcols(i_cds.pa)[['gene_name']])
       np_start_pos <- start(i_cds.pa)
@@ -1127,7 +1127,7 @@ protToExonSeqs <- function(cds.pa,proteins,prot_id){
       gene_prot <- AAStringSet(x = subseq(x = fullProtSeq,start = np_start_pos,end = np_end_pos))
       names(gene_prot) <- paste(gene_name,':x',mcols(i_cds.pa)[['exon_rank']],'_',prot_id,sep = '')
    }
-   
+
    return(gene_prot)
 }
 
@@ -1137,36 +1137,36 @@ runArriba <- function(rnaFolder){
    if (!dir.exists(dirname(arribaOutDir))){dir.create(dirname(arribaOutDir)); dir.create(arribaOutDir)
    } else if (!dir.exists(arribaOutDir)){dir.create(arribaOutDir)}
    sample_db <- getAllSamplesInCase(folder = rnaFolder)
-   
+
    dna_sid <- sample_db[sample_db$genomeLevel == 'DNA' & sample_db$application == 'MATEPAIR','sampleId']
    dna_ppdir <- getPostProcessingDir(sampleId = dna_sid,postProcessingFolder = 'svar-1')
    junction.csv <- file.path(dna_ppdir,'reports',paste(dna_sid,'alts_comprehensive.csv',sep='_'))
-   
+
    rna_sid <- getSampleId(folder = rnaFolder)
    rna_ppdir <- getPostProcessingDir(rnaFolder,postProcessingFolder = 'svar-1')
-   
+
    chimeric.bam = file.path(maprseq3OutDir,
                             'output/bams/chimera_data',paste(rna_sid,'Chimeric.out.sam',sep='.'))
    aligned.bam = file.path(maprseq3OutDir,
                            'output/bams',paste(rna_sid,'Aligned.sortedByCoord.out.bam',sep='.'))
-   
-   
+
+
    out.tsv <- file.path(arribaOutDir,paste(rna_sid,'arriba_output.tsv',sep='_'))
-   
+
    # Arriba Default Parameters (BMD) ----
    blacklist.file = '/research/labs/experpath/vasm/shared/NextGen/tools/arriba/database/blacklist_hg38_GRCh38_v2.1.0.tsv.gz';
-   annotation.file <- '/research/labs/experpath/vasm/shared/Genome/Human/referenceFiles/ensemblGene_Homo_sapiens.GRCh38.86-20161028.gtf'; 
-   ref.file = '/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.fna'; 
+   annotation.file <- '/research/labs/experpath/vasm/shared/Genome/Human/referenceFiles/ensemblGene_Homo_sapiens.GRCh38.86-20161028.gtf';
+   ref.file = '/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.fna';
    overwrite.arriba = FALSE
-   
+
    arriba_log_file <- file.path(arribaOutDir,'arriba_log.txt')
-   
-   
+
+
    arriba.df <- arriba(chimeric.bam = chimeric.bam, aligned.bam = aligned.bam,junction.csv = junction.csv,out.tsv = out.tsv,
                        blacklist.file = blacklist.file, annotation.file = annotation.file,ref.file = ref.file,overwrite.arriba = overwrite.arriba
    )
    arriba_out_file <- file.path(arribaOutDir,paste(rna_sid,'arriba_junction_analysis.tsv',sep='_'))
-   
+
    arriba_version <- strsplit(system(command ='/research/labs/experpath/vasm/shared/NextGen/tools/arriba/arriba -help',intern = TRUE)[1],
                               split = ' ')[[1]][4]
    bmd.write.table(x = arriba.df,file = arriba_out_file,
@@ -1185,7 +1185,7 @@ runArriba <- function(rnaFolder){
                                    ''),
                    fileLabel = 'arribaOutput',
                    deleteIfExists = TRUE)
-   
+
 }
 
 arriba <- function(chimeric.bam,aligned.bam,junction.csv,blacklist.file,annotation.file,ref.file,out.tsv,
@@ -1194,14 +1194,14 @@ arriba <- function(chimeric.bam,aligned.bam,junction.csv,blacklist.file,annotati
       out.dir <- paste(head(strsplit(out.tsv,'/')[[1]],-1),collapse='/')
       tmp_jct_file <- file.path(out.dir,'junction_tmp.tsv')
       jct_file_lines <- readLines(junction.csv)
-      
+
       jcts_full.df <- read.delim(junction.csv,skip=grep('eventId',jct_file_lines) - 1,sep=',')
       junctions.df <- data.frame('pos1' = paste(convertChromToCharacter(ichr = jcts_full.df$chrA),':',jcts_full.df$posA,sep =''),
                                  'pos2' = paste(convertChromToCharacter(ichr = jcts_full.df$chrB),':',jcts_full.df$posB,sep =''),
                                  'dirA' = ifelse(sign(jcts_full.df$mposA)== 1,'-','+'),
                                  'dirB' = ifelse(sign(jcts_full.df$mposB)== 1,'-','+'))
       write.table(x = junctions.df,file = tmp_jct_file,row.names = FALSE,col.names = FALSE,quote=FALSE,sep='\t')
-      
+
       arriba.cmd <- paste('/research/labs/experpath/vasm/shared/NextGen/tools/arriba/arriba -c',chimeric.bam,
                           '-x',aligned.bam,
                           '-g',annotation.file,
@@ -1213,7 +1213,7 @@ arriba <- function(chimeric.bam,aligned.bam,junction.csv,blacklist.file,annotati
       system(arriba.cmd)
       unlink(tmp_jct_file)
    }
-   
+
    arriba.df <- loadArriba(out.tsv)
    return(arriba.df)
 }
@@ -1283,14 +1283,14 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                          'arribaFrame' = character(n),
                          'arribaConf' = character(n),
                          'arribaSeq' = character(n))
-   
+
    # tx_cols <- c('RNA_RPs','geneA','geneB','TX','tx_num')
    iRow <- 1
    event_list <- sort(unique(jct.df$eventId))
    # jct.df <- jct.df[!duplicated(jct.df$eventId),]
    for (iE in event_list){ # loop over iE ----
       jct_idx <- which(jct.df$eventId == iE & jct.df$Nassoc == max(jct.df$Nassoc[jct.df$eventId == iE]))[1]
-      
+
       if (iE %in% event.df$DNA_eventId){
          e_spanning_RPs = event.df[event.df$DNA_eventId == iE,'RNA_RPs']
          e_DNA_RPs = event.df[event.df$DNA_eventId == iE,'DNA_RPs']
@@ -1308,8 +1308,8 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
       }
       junctionType = jct.df[jct_idx,'junctionType']
       junctionSupport = jct.df[jct_idx,'support']
-      
-      
+
+
       if (is.data.frame(geneExpression.df)){
          if (grepl(';',e_geneA)){
             e_geneA_reads <- sum(geneExpression.df[geneExpression.df$GeneName %in% strsplit(e_geneA,';')[[1]],'Count'])
@@ -1321,7 +1321,7 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
             e_geneA_reads <- 0
             e_geneA_rpkm = 0
          }
-         
+
          if (grepl(';',e_geneB)){
             e_geneB_reads <- sum(geneExpression.df[geneExpression.df$GeneName %in% strsplit(e_geneB,';')[[1]],'Count'])
             e_geneB_rpkm <- sum(geneExpression.df[geneExpression.df$GeneName %in% strsplit(e_geneB,';')[[1]],'RPKM_by_gene'])
@@ -1336,7 +1336,7 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
          to_zero <- c('e_geneA_reads','e_geneA_rpkm','e_geneB_reads','e_geneB_rpkm')
          sapply(X = to_zero,FUN = 'assign',value = 0,pos = 1)
       }
-      
+
       jct_arribaSeq = ''
       jct_arribaGenes = ''
       jct_arribaConf = ''
@@ -1356,8 +1356,8 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
             jct_arribaFrame <- arriba.df$reading_frame[jct_arriba_idx]
             jct_arribaSeq <- arriba.df[jct_arriba_idx,'peptide_sequence']
          } else if (length(jct_arriba_idx) > 1){
-            
-            
+
+
             jct_arribaGenes <- character(length(jct_arriba_idx))
             jct_arribaConf <- character(length(jct_arriba_idx))
             jct_arribaSites <- character(length(jct_arriba_idx))
@@ -1378,13 +1378,13 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
             jct_arribaType <- paste(jct_arribaType,collapse='|')
             jct_arribaFrame <- paste(jct_arribaFrame, collapse='|')
             jct_arribaSeq <- paste(jct_arribaSeq,collapse='|')
-         } 
-      } 
-      
-      
+         }
+      }
+
+
       e_tx.df <- tx.df[tx.df$DNA_eventId == iE,]
-      
-      if (nrow(e_tx.df) > 0){ 
+
+      if (nrow(e_tx.df) > 0){
          for (iTX in 1:nrow(e_tx.df)){ # loop over iTX ----
             # arriba_idx = integer(0)
             # arribaSeq <- ''
@@ -1394,9 +1394,9 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
             # arribaSites = ''
             # arribaType = ''
             # arribaFrame = ''
-            
-            
-            
+
+
+
             txName <- e_tx.df[iTX,'tx_num']
             txSeq <- e_tx.df[iTX,'TX']
             txConf <- e_tx.df[iTX,'tx_conf']
@@ -1410,11 +1410,11 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
             } else {
                txBlatCov <- sum(t_blat.gr$map_cov)
             }
-            
+
             t_orf.df <- orf.df[orf.df$tx_name == e_tx.df[iTX,'tx_num'],]
             orfOut <- e_tx.df[iTX,'np_output']
             if (nrow(t_orf.df) > 0){
-               
+
                for (iORF in 1:nrow(t_orf.df)){
                   # arriba_idx = integer(0)
                   # arribaSeq <- ''
@@ -1424,8 +1424,8 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                   # arribaSites = ''
                   # arribaType = ''
                   # arribaFrame = ''
-                  
-                  
+
+
                   orfKmers <- t_orf.df[iORF,'n_kmers']
                   gene_str <- strsplit(t_orf.df[iORF,'gene'],'-')[[1]]
                   orfGeneA <- gene_str[1]
@@ -1433,8 +1433,8 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                      orfGeneA_reads <- geneExpression.df[geneExpression.df$GeneName == orfGeneA[1],'Count']
                   } else {orfGeneA_reads <- 0}
                   orfExonHitA <- strsplit(strsplit(t_orf.df[iORF,'source_prot'],'_')[[1]][1],':')[[1]][2]
-                  
-                  
+
+
                   if (length(gene_str) > 1){
                      orfGeneB <- gene_str[2]
                      if (is.data.frame(geneExpression.df) & any(geneExpression.df$GeneName == orfGeneB)){
@@ -1446,13 +1446,13 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                      orfExonHitB = ''
                      orfGeneB_reads = 0
                   }
-                  
+
                   orfSeq <- t_orf.df[iORF,'seq']
                   orfPos <- paste(t_orf.df[iORF,'strand'],':',t_orf.df[iORF,'startPosSign'],'-',t_orf.df[iORF,'endPosSign'],sep='')
                   orfFilter <- t_orf.df[iORF,'ex_crit']
                   orfName <- t_orf.df[iORF,'name']
                   neopepSeq <- t_orf.df[iORF,'neopep']
-                  
+
                   t_np.df <- np.df[np.df$tx_name == e_tx.df[iTX,'tx_num'],]
                   if (nrow(t_np.df) == 1){
                      # neopepSeq <- t_np.df$Seq
@@ -1460,19 +1460,19 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                   } else {
                      neopepName = ''
                   }
-                  
+
                   # arriba match? ----
                   arriba_idx <- integer(0)
-                  
-                  
-                  
+
+
+
                   if (is.data.frame(arriba.df)){
                      # arriba_idx <- which((arriba.df$genomic_breakpoint1 == e_bpA & arriba.df$genomic_breakpoint2 == e_bpB ) |
                      #                        (arriba.df$genomic_breakpoint1 == e_bpB &  arriba.df$genomic_breakpoint2 == e_bpA) )
                      arriba_idx <- which((arriba.df$genomic_breakpoint1 == e_bpA & arriba.df$gene1 == orfGeneA & arriba.df$genomic_breakpoint2 == e_bpB ) |
                                             (arriba.df$genomic_breakpoint1 == e_bpB & arriba.df$gene1 == orfGeneA & arriba.df$genomic_breakpoint2 == e_bpA) )
                   }
-                  
+
                   if (length(arriba_idx) == 1){
                      arribaGenes <- paste(arriba.df[arriba_idx,c('gene1','gene2')],collapse='-->')
                      arribaConf <- as.character(arriba.df[arriba_idx,'confidence'])
@@ -1480,7 +1480,7 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                      arribaType <- arriba.df$type[arriba_idx]
                      arribaFrame <- arriba.df$reading_frame[arriba_idx]
                      arribaSeq <- arriba.df[arriba_idx,'peptide_sequence']
-                     
+
                      peptide_sequence <- toupper(sub('\\*','',sub('\\|','',arriba.df[arriba_idx,'peptide_sequence'])))
                      if (peptide_sequence != '.'){
                         if (neopepSeq != ''){
@@ -1494,19 +1494,19 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                            arribaPeptideMatch <- ifelse(pep_match > 0,'YES','NO')
                         }
                      } else {arribaPeptideMatch = 'NO'}
-                     
-                     
+
+
                      # if (arribaPeptideMatch == 'YES'){
                      #    arribaSeq <- arriba.df[arriba_idx,'peptide_sequence']
                      # }
                   } else if (length(arriba_idx) > 1){
-                     
-                     
+
+
                      peptide_sequence <- toupper(sub('\\*','',sub('\\|','',arriba.df[arriba_idx,'peptide_sequence'])))
                      peptide_match <- character(length(arriba_idx))
                      # arribaSeq <- arriba.df[arriba_idx,'peptide_sequence']
                      for (i_idx in 1:length(arriba_idx)){
-                        
+
                         if (peptide_sequence[i_idx] != '.'){
                            if (nchar(orfSeq) >= nchar(peptide_sequence[i_idx])){
                               pep_match <- countPattern(pattern = peptide_sequence[i_idx],subject = subseq(orfSeq,start = nchar(orfSeq) - nchar(peptide_sequence[i_idx])+1),max.mismatch = 2)
@@ -1529,11 +1529,11 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                         arribaSites <- paste(arriba.df[arriba_idx,c('site1','site2')],collapse='-->')
                         arribaType <- arriba.df$type[arriba_idx]
                         arribaFrame <- arriba.df$reading_frame[arriba_idx]
-                        
+
                      } else if (sum(peptide_match == 'YES') > 1){
                         # message('Event ',iE,' TX ',txName,' ORF ',orfName,' has multiple Arriba hits')
                         arriba_idx = arriba_idx[peptide_match == 'YES'][1]
-                        
+
                         arriba_idx = arriba_idx[peptide_match == 'YES'][1]
                         arribaPeptideMatch <- 'YES'
                         arribaSeq <- arriba.df$peptide_sequence[arriba_idx]
@@ -1543,8 +1543,8 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                         arribaSites <- paste(arriba.df[arriba_idx,c('site1','site2')],collapse='-->')
                         arribaType <- arriba.df$type[arriba_idx]
                         arribaFrame <- arriba.df$reading_frame[arriba_idx]
-                        
-                        
+
+
                      } else { # no peptide matches, multiple arriba_idx
                         arriba_idx <- arriba_idx[1]
                         arribaPeptideMatch <- 'NO'
@@ -1555,7 +1555,7 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                         arribaType <- arriba.df$type[arriba_idx]
                         arribaFrame <- arriba.df$reading_frame[arriba_idx]
                      }
-                     
+
                   } else {# cases: | arriba_idx | > 0
                      arriba_idx <- integer(0)
                      arribaPeptideMatch <- ''
@@ -1567,8 +1567,8 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                      arribaFrame <- jct_arribaFrame
                      arribaSeq <- jct_arribaSeq
                   }
-                  
-                  
+
+
                   case.df[iRow,'eventId'] <- iE
                   case.df[iRow,'RNA_RPs'] <- e_spanning_RPs
                   case.df[iRow,'DNA_RPs'] <- e_DNA_RPs
@@ -1610,10 +1610,10 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                   case.df[iRow,'arribaType'] <- arribaType
                   case.df[iRow,'arribaSeq'] <- arribaSeq
                   case.df[iRow,'arribaPeptideMatch'] <- arribaPeptideMatch
-                  
-                  
-                  
-                  
+
+
+
+
                   iRow = iRow + 1
                } # loop over iORF in 1:nrow(t_orf.df)
             } else { #if nrow(t_orf.df) == 0
@@ -1630,13 +1630,13 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                case.df[iRow,'geneB'] <- e_geneB
                case.df[iRow,'readsGeneB'] <- e_geneB_reads
                case.df[iRow,'rpkmGeneB'] <- e_geneB_rpkm
-               
+
                case.df[iRow,'txName'] <- txName
                case.df[iRow,'txSeq'] <- txSeq
                case.df[iRow,'txLength'] <- txLength
                case.df[iRow,'txConf'] <- txConf
                case.df[iRow,'txUsedReads'] <- txUsedReads
-               
+
                case.df[iRow,'txBlat'] <- txBlat
                case.df[iRow,'txBlatCov'] <- txBlatCov
                case.df[iRow,'orfOut'] <- orfOut
@@ -1653,14 +1653,14 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
                case.df[iRow,'orfName' ] <- ''
                case.df[iRow,'neopepSeq'] <- ''
                case.df[iRow,'neopepName'] <- ''
-               
+
                case.df[iRow,'arribaGenes'] <- jct_arribaGenes
                case.df[iRow,'arribaConf'] <- jct_arribaConf
                case.df[iRow,'arribaSites'] <- jct_arribaSites
                case.df[iRow,'arribaFrame'] <- jct_arribaFrame
                case.df[iRow,'arribaType'] <- jct_arribaType
                case.df[iRow,'arribaSeq'] <- jct_arribaSeq
-               
+
                iRow = iRow + 1
             } # if nrow(e_tx.df) > 0 and nrow(e_orf.df) == 0
          } # loop over iTX
@@ -1678,18 +1678,18 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
          case.df[iRow,'geneB'] <- e_geneB
          case.df[iRow,'readsGeneB'] <- e_geneB_reads
          case.df[iRow,'rpkmGeneB'] <- e_geneB_rpkm
-         
-         
+
+
          case.df[iRow,'arribaGenes'] <- jct_arribaGenes
          case.df[iRow,'arribaConf'] <- jct_arribaConf
          case.df[iRow,'arribaSites'] <- jct_arribaSites
          case.df[iRow,'arribaFrame'] <- jct_arribaFrame
          case.df[iRow,'arribaType'] <- jct_arribaType
          case.df[iRow,'arribaSeq'] <- jct_arribaSeq
-         
+
          iRow = iRow + 1
       } else { # if nrow(e_tx.df) == 0
-         
+
          case.df[iRow,'eventId'] <- iE
          case.df[iRow,'RNA_RPs'] <- e_spanning_RPs
          case.df[iRow,'DNA_RPs'] <- e_DNA_RPs
@@ -1704,7 +1704,7 @@ caseSummary <- function(file.prefix,tx.df,jct.df,orf.df,event.df,blat.gr,np.df,
          case.df[iRow,'readsGeneB'] <- e_geneB_reads
          case.df[iRow,'rpkmGeneB'] <- e_geneB_rpkm
          iRow = iRow + 1
-      } 
+      }
    } # loop over iE
    case.df <- case.df[1:iRow,]
    return(case.df)
