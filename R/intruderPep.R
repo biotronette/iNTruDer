@@ -5,7 +5,7 @@ library(ensembldb)
 if (!exists('edb.ucsc')){
    edb <- EnsDb.Hsapiens.v86
    edb.ucsc <- edb
-   ensdb::seqlevelsStyle(edb.ucsc) <- 'UCSC'}
+   ensembldb::seqlevelsStyle(edb.ucsc) <- 'UCSC'}
 source("/research/labs/experpath/vasm/shared/NextGen/judell/Rprojects/vasm_bmd/julia/utilities.R", echo=FALSE)
 
 intruderPep <- function(tx.df,blat.gr,
