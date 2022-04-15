@@ -10,7 +10,8 @@ Depends: Biostrings,
          IRanges,
          readr,
          seqinr,
-         tictoc
+         tictoc,
+         BSgenome.Hsapiens.NCBI.GRCh38
 Description: More about what it does (maybe more than one line)
     Use four spaces when indenting paragraphs within the Description.
 License: LGPL-3

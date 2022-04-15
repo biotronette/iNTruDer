@@ -1,0 +1,10 @@
+digraph {
+inputData --> intruderAssembly
+intruderAssembly --> velvet
+velvet --> oases
+oases --> assembledTX
+assembledTX --> blat #subgraph of blat parameters?
+blat --> mappedTX
+mappedTX --> matchingCDS
+matchingCDS --> foo
+}

@@ -1,0 +1,20 @@
+name: intruder_trans
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+  - r
+dependencies:
+  - sra-tools
+  - blast
+  - parallel
+  - biopython
+  - samtools=1.12
+  - seqtk=1.3
+  - mcl=14.137
+  - pip=21.0.1
+  - pip:
+    - biopython
+    - scipy
+    - numpy
+    - bashplotlib
