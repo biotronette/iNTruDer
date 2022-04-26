@@ -1,27 +1,3 @@
-# libraries & paths ----
-#
-# library(IRanges)
-# library(Biostrings)
-# library(ensembldb)
-# library(seqinr)
-# library(EnsDb.Hsapiens.v86)
-# library(readr)
-# library(tictoc)
-#
-# edb <- EnsDb.Hsapiens.v86
-# edb.ucsc <- edb
-# ensembldb::seqlevelsStyle(edb.ucsc) <- 'UCSC'
-#
-# blat_path <- '/research/bsi/tools/biotools/blat/36.5/bin/blat'
-# gen_ref_path <- '/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.fna'
-#
-# # source("/research/labs/experpath/vasm/shared/NextGen/judell/Rprojects/vasm_bmd/julia/utilities.R", echo=FALSE)
-# source("/research/labs/experpath/vasm/shared/NextGen/judell/Rprojects/vasm_bmd/julia/intruderPep.R", echo=FALSE)
-# source("/research/labs/experpath/vasm/shared/NextGen/judell/Rprojects/vasm_bmd/julia/intruderAssembly.R", echo=FALSE)
-#
-#
-
-
 intruderPipe <- function(reads.filename = NA,
                          reads1 = NA,
                          reads2 = NA,
@@ -50,7 +26,7 @@ intruderPipe <- function(reads.filename = NA,
                          overwrite_blat = FALSE,
                          cov_cutoff = 'dynamic',
                          flash.threshold = 50,
-                         overwrite_ref = FALSE,
+                         overwrite_raw_files = FALSE,
                          optimize_velvet = TRUE,
                          tpm_threshold = 30,
                          prot_ref_by = 'prot',
@@ -73,17 +49,19 @@ intruderPipe <- function(reads.filename = NA,
                   'np.ss' = AAStringSet(),
                   'blat.gr' = GRanges())
    if (is.na(caseId)){caseId = sampleIdRNA}
-
+   # register(MulticoreParam(workers = numCores),default = TRUE)
 
 
    # wrangling the rnaSupportforDNASeqJcts file -----
    if (!dir.exists(dirname(out.dir))){
-      dir.create(dirname(out.dir)); dir.create(out.dir)
-   } else if (!dir.exists(out.dir)){dir.create(out.dir)}
+      dir.create(out.dir,recursive = TRUE)
+   }
+   reports.dir <- file.path(out.dir,'reports')
+   if (!dir.exists(reports.dir)){dir.create(reports.dir,recursive = TRUE)}
 
    seq.df <- loadRNAReads(readsFileName = reads.filename)
    # TODO: verify that loadRNAreads handles case of not merging events correctly
-   message('\n*********\nBeginning analysis of ',nrow(seq.df), ' spanning RNA RPs from ',sampleIdRNA,'...')
+   # message('\n*********\nBeginning analysis of ',nrow(seq.df), ' spanning RNA RPs from ',sampleIdRNA,'...')
 
 
    write_jct_csv = FALSE
@@ -106,59 +84,52 @@ intruderPipe <- function(reads.filename = NA,
 
    output[['seq.df']] <- seq.df
 
-
+   event_list <- as.integer(names(table(seq.df$DNA_eventId))[table(seq.df$DNA_eventId) >= reads.threshold])
    # Transcript wrangling ----
 
-   tx.dir <- file.path(out.dir,'tx')
-   if (!dir.exists(tx.dir)){dir.create(tx.dir)}
+   tx.dir <- file.path(out.dir,'assembly/by_event')
+   if (!dir.exists(tx.dir)){dir.create(tx.dir,recursive = TRUE)}
 
-   tx.df.filename <- file.path(out.dir,paste(sampleIdRNA,'TX_final.csv',sep='_'))
-   tx.df_tmp.filename <- file.path(out.dir,'tx',paste(sampleIdRNA,'TX.csv',sep='_'))
+   # tx.df.filename <- file.path(reports.dir,paste(sampleIdRNA,'TX_final.csv',sep='_'))
+   tx.df.filename <- file.path(tx.dir,paste(sampleIdRNA,'TX.csv',sep='_'))
    tx.df <- data.frame()
-   tx.gr <- GRanges()
-   tx.gr_file <- file.path(tx.dir,'tx.alignment.csv')
-   # if (is.na(insert_length) & !is.na(folderNum)){insert_length <- getInsertLength(folderNum = folderNum,read_length_source = 'BMD')}
 
    ## call intruderAssembly ----
 
-   if (overwrite_tx || ! file.exists(tx.df.filename) & ! file.exists(tx.df_tmp.filename) ){
+   if (overwrite_tx || ! file.exists(tx.df.filename) ){
 
 
+      # good_event_dirs <- file.path(tx.dir,paste('event',formatC(x = event_list,width = 3,format = 'd',flag = 0),sep='_'))
+      # bad_event_dirs <- list.dirs(tx.dir)[!list.dirs(tx.dir) %in% good_event_dirs]
+      # unlink(bad_event_dirs,recursive = TRUE)
 
-      # debug:
-      # reads.threshold = 0;  cov_cutoff = 'dynamic';
-      # overwrite_tx <- TRUE ;  cleanup_tx_dir = FALSE;
-      # optimize_velvet = TRUE; out.dir = tx.dir; file.prefix = sampleIdRNA
-
-      # for transrate: need aligned, chimera bam files
-      #
-      cov_cutoff = 'dynamic'; method = 'spades';optimize_velvet = FALSE;
+      method = 'spades'
+      file.prefix = sampleIdRNA
       #out.dir = tx.dir;
       tic()
-      assembly.out <- intruderAssembly(reads.filename = reads.filename,
-                                       reads1 = reads1,reads2 = reads2,
-                                       aligned.bam = aligned.bam,
-                                       chimeric.bam = chimeric.bam,
-                                       tx.dir = tx.dir,
-                                       file.prefix = file.prefix,
-                                       reads.threshold = reads.threshold,
-                                       insert_length = insert_length,
-                                       cov_cutoff = cov_cutoff,
-                                       overwrite = overwrite_tx,
-                                       overwrite_plots = overwrite_plots,
-                                       numCores = numCores,
-                                       tpm_threshold = tpm_threshold,
-                                       # optimize_velvet = optimize_velvet,
-                                       method = method)
+      tx.df <- intruderAssembly(reads.filename = reads.filename,
+                                reads1 = reads1,reads2 = reads2,
+                                aligned.bam = aligned.bam,
+                                chimeric.bam = chimeric.bam,
+                                tx.dir = tx.dir,
+                                file.prefix = file.prefix,
+                                reads.threshold = reads.threshold,
+                                insert_length = insert_length,
+                                cov_cutoff = cov_cutoff,
+                                overwrite = overwrite_tx,
+                                overwrite_plots = overwrite_plots,
+                                overwrite_raw_files = overwrite_raw_files,
+                                numCores = numCores,
+                                tpm_threshold = tpm_threshold,
+                                method = method)
 
 
-      tx.df <- assembly.out$tx.df
-      tx.gr <- assembly.out$tx.gr
+      # tx.df <- assembly.out
+      # tx.gr <- assembly.out$tx.gr
       tx.toc <- toc()
       message(paste(nrow(tx.df),'TX assembled in',
                     paste(format((tx.toc$toc - tx.toc$tic)/60,digits = 3),'minutes')))
-      #diamond.df <- assembly.out$diamond.df
-      #quant.df <- assembly.out$quant.df
+
 
 
    } else if (file.exists(tx.df.filename) ) {
@@ -168,7 +139,7 @@ intruderPipe <- function(reads.filename = NA,
    } else if (file.exists(tx.df_tmp.filename) && length(readLines(tx.df_tmp.filename))> 1){
       try(tx.df <- read.table(file = tx.df_tmp.filename,header=TRUE,as.is=TRUE,sep=','))
       message('Loaded ',nrow(tx.df), ' assembled transcripts from ',tx.df_tmp.filename,'.')
-      try (tx.gr <- makeGRangesFromDataFrame(read.table(file = tx.gr_file, header = TRUE,sep=','),keep.extra.columns = TRUE))
+      # try (tx.gr <- makeGRangesFromDataFrame(read.table(file = tx.gr_file, header = TRUE,sep=','),keep.extra.columns = TRUE))
    }
    if (nrow(tx.df) > 0){
       tx.df <- tx.df[order(tx.df$DNA_eventId,tx.df$tx_num),]
@@ -177,259 +148,226 @@ intruderPipe <- function(reads.filename = NA,
    # Compare to reference proteins w diamond ----
    #tx.df <-
    tx.out.fa <- file.path(tx.dir,'transcripts.fa')
-   diamond.df <- runDiamond(tx.dir = tx.dir,tx.out.fa)
+
+   # Blat ----
+   message('Blatting transcripts...')
+   all_blat.tsv <- file.path(tx.dir,'tx.alignment.csv')
+
+   if ((!file.exists(all_blat.tsv) || length(readLines(all_blat.tsv)) == 1) | overwrite_tx){
+      event_list <- unique(tx.df$DNA_eventId)
+      blat.out <- list(length = event_list)
+
+      blat.out <- bplapply(X = event_list,FUN = function(i) blat(event.dir = file.path(tx.dir,paste('event',formatC(x = i,width = 3,flag = 0,format = 'd'),sep='_')),
+                                                                 overwrite_tx = overwrite_tx,
+                                                                 jct.gr = getGRangesFromInputDF(seq.df = seq.df,event = i)))
+
+
+
+      TX.blat_file_list <- sapply(X = event_list,FUN = function(i) file.path(tx.dir,paste0('event_',formatC(x = i,width = 3,flag = 0,format = 'd')),'good.transcripts.alignments.tsv'))
+      TX.blat_file_list <- TX.blat_file_list[file.exists(TX.blat_file_list)]
+      system(command = paste('cat',TX.blat_file_list[1],'>',all_blat.tsv,'&& awk FNR-1',paste(TX.blat_file_list[-1],collapse=' '),' >>',all_blat.tsv))
+
+      blat.gr <- makeGRangesFromDataFrame(df = read.table(file = all_blat.tsv,header=TRUE,stringsAsFactors = FALSE),keep.extra.columns = TRUE)
+
+   } else {
+      blat.gr <- makeGRangesFromDataFrame(df = read.table(file = all_blat.tsv,header=TRUE,stringsAsFactors = FALSE),keep.extra.columns = TRUE)
+   }
+
+   diamond.df <- runDiamond(tx.dir = tx.dir,input.fa = tx.out.fa)
 
    tx.df$inDiamond <- sapply(X = tx.df$tx_num,FUN = function(x) x %in% diamond.df$query)
    if (!'goodTranscript' %in% names(tx.df)){tx.df$goodTranscript <- tx.df$tx_num %in% getFastaHeader(fasta_file = tx.out.fa)}
 
    # Quantifying read abundance ----
+   quant.dir <- file.path(tx.dir,'quant')
+   salmon.dir <- file.path(tx.dir,'salmon')
+   # kallisto.dir <- file.path(tx.dir,'kallisto')
 
-   quant.df <- salmon(tx.dir = tx.dir, salmon_input.fa = tx.out.fa,reads1 = reads1,reads2 = reads2,tpm_threshold = tpm_threshold,overwrite = overwrite_tx)
+   salmon.df <- salmon(tx.dir = tx.dir, salmon_input.fa = tx.out.fa,reads1 = reads1,reads2 = reads2,tpm_threshold = tpm_threshold,overwrite = overwrite_tx)
 
 
    # Adding quant, mapping information to tx.df ----
 
-   tx.df$salmon_tpm <- sapply(X = tx.df$tx_num, FUN = function(i) ifelse(i %in% quant.df$Name, quant.df[quant.df$Name == i,'TPM'],0))
-   tx.df$numReads <- sapply(X = tx.df$tx_num, FUN = function(i) ifelse(i %in% quant.df$Name, quant.df[quant.df$Name == i,'NumReads'],0))
+   tx.df$salmon_tpm <- sapply(X = tx.df$tx_num, FUN = function(i) ifelse(i %in% salmon.df$Name, salmon.df[salmon.df$Name == i,'TPM'],0))
+   tx.df$numReads <- sapply(X = tx.df$tx_num, FUN = function(i) ifelse(i %in% salmon.df$Name, salmon.df[salmon.df$Name == i,'NumReads'],0))
 
-   quant.df <- read.table(file = file.path(tx.dir,'salmon','quant.sf'),sep='\t',header = TRUE,stringsAsFactors = FALSE)
-   quant_pass.df <- quant.df[quant.df$TPM >= tpm_threshold,]
+   # salmon.df <- read.table(file = file.path(tx.dir,'salmon','quant.sf'),sep='\t',header = TRUE,stringsAsFactors = FALSE)
+   # quant_pass.df <- salmon.df[salmon.df$TPM >= tpm_threshold,]
 
 
    # Filter TX before proceeding ----
-   #tx.df$tpm
+
 
    output[['tx.df']] <- tx.df
-   output[['tx.gr']] <- tx.gr
-   tx_gr.csv <- file.path(tx.dir,'TX_mapping.tsv')
-   #blat.df <- read.table(file = tx_gr.csv,sep=' ',header=TRUE,stringsAsFactors = FALSE)
-   #blat.df[,c('start','end','width','alignment_length','mismatches','gap_o')]
-   blat.gr <- makeGRangesFromDataFrame(df = read.table(file = tx_gr.csv,sep=' ',header=TRUE,stringsAsFactors = FALSE),keep.extra.columns = TRUE)
-   #
-   #
-   #    if (method != 'spades'){
-   #       ## call BLAT, blatToGRange ------
-   #       blat.gr = GRanges()
-   #
-   #
-   #       if (nrow(tx.df) > 0) {
-   #          blat.dir <- file.path(out.dir,'blat')
-   #          if (!dir.exists(blat.dir)){dir.create(blat.dir)}
-   #          #tx.df.hits <- tx.df[tx.df$geneA_match > 1 | tx.df$geneB_match > 1,]
-   #
-   #
-   #          blat_filename <- file.path(blat.dir,paste(sampleIdRNA,'_junction_tx.rds',sep=''))
-   #
-   #          if (overwrite_blat | !file.exists(blat_filename)){
-   #             tx.ss <- DNAStringSet(tx.df$TX,use.names = TRUE)
-   #             names(tx.ss) <- tx.df$tx_num
-   #             message('Running blat...')
-   #             tic()
-   #             blat.df <- blat(stringset = tx.ss,filename = sampleIdRNA,directory = blat.dir)
-   #             dt <- toc()
-   #             message('BLAT ran in ',format((dt$toc - dt$tic)/60,digits = 3),' minutes; ',format((dt$toc - dt$tic)/nrow(tx.df),digits = 3),' seconds per TX.')
-   #             message('Sorting blat results...')
-   #             tic()
-   #             blat.gr <- suppressWarnings(blatToGRange(blat.df = blat.df,tx.df = tx.df))
-   #             blat.gr$event <- as.numeric(unlist(regmatches(blat.gr$query,gregexpr('(?<=J_)\\d+(?=_Loc)',blat.gr$query,perl=TRUE))))
-   #             blat.gr <- blat.gr[order(blat.gr$event,blat.gr$query,blat.gr$query_start)]
-   #
-   #             dt <- toc()
-   #             message('BLAT results filtered in ',format((dt$toc - dt$tic)/60,digits = 3),' minutes; ',format(x = (dt$toc - dt$tic)/nrow(tx.df),digits = 3),' seconds per TX.\n')
-   #             blat_file <- file(blat_filename)
-   #             saveRDS(object = blat.gr,file = blat_file)
-   #             close(blat_file)
-   #          } else {
-   #             blat.gr <- readRDS(blat_filename)
-   #
-   #          }
-   #
-   #
-   #          output[['blat.gr']] <- blat.gr
-   #          tx.df$blat <- tx.df$tx_num %in% blat.gr$query
-   #       }
-   #    } else if (file.exists(tx_gr.csv)) {
-   #
-   #       blat.gr <- makeGRangesFromDataFrame(df = read.table(tx_gr.csv,header=TRUE,sep=','),keep.extra.columns = TRUE)
-   #       blat.gr$event <- sapply(X = blat.gr$query,FUN = function(i) strsplit(i,'_')[[1]][2])
-   #       tx.df$blat <- tx.df$tx_num %in% blat.gr$query
-   #    } else {
-   #       blat.gr <- GRanges()
-   #    }
-
-
-   ## Writing junction + TX plots ----
+   # output[['tx.gr']] <- tx.gr
+   # tx_gr.csv <- file.path(tx.dir,'TX_mapping.tsv')
 
 
    blat_event_list <- unique(blat.gr$event)
 
-   if (overwrite_plots){cl <- makeForkCluster(spec = getOption('cl.cores',numCores))
-   parSapply.out <- parSapplyLB(cl = cl, X = blat_event_list,FUN = function(event) runTxViz(event.dir = file.path(tx.dir,paste0('event_',event)),overwrite_plots = overwrite_plots) )
-   stopCluster(cl)}
 
-
-   ## Write protein ref by exon ----
-
-
-   # debug: overwrite_ref = FALSE; overwrite_plots = FALSE; overwrite_np = TRUE
-   # out.dir <- file.path(ppdir,'dev')
-   np.dir <- file.path(out.dir,'prot')
-   #if (!dir.exists(np.dir)){dir.create(np.dir)}
-   if (FALSE){
-      np_ref.dir <- file.path(out.dir,'prot','ref')
-      if (!dir.exists(np_ref.dir)){dir.create(np_ref.dir,recursive = TRUE)}
-
-      # event_list <- as.integer(unique(blat.gr$event))
-      if (prot_ref_by == 'exon'){
-         if (length(event_list) > 0){
-            message('Checking reference proteome files...')
-            make_hash_table <- FALSE
-            for (event in event_list){
-               e_tx.gr <- blat.gr[grepl(paste('J',event,'',sep = '_'),blat.gr$query)] # removed merged tag
-               e_tx.df <- tx.df[tx.df$DNA_eventId == event ,]#& tx.df$kmer_size == 'merged',]
-               e_prot_ref_fa_filename <- file.path(np_ref.dir,paste('event',event,'prot_ref.fa',sep='_'))
-               e_prot_hash_rds_filename <- file.path(np_ref.dir,paste('event',event,'prot_ref_hash.rds',sep='_'))
-               if (length(e_tx.gr) > 0 && (!file.exists(e_prot_ref_fa_filename) | overwrite_ref)){
-
-                  suppressMessages(suppressWarnings(protOut <- getProtExonSeq(e_tx.gr = e_tx.gr)))
-
-                  e_ref_prot <- unique(protOut$gene_prot)
-                  if (length(e_ref_prot) ==0  ){
-                     # message('No CDS overlaps for event ',event)
-                     unlink(e_prot_ref_fa_filename)
-                     e_ref_prot <- AAStringSet()
-                  } else {
-                     message('Found ',length(protOut$gene_prot),' reference protein sequences for event ',event)
-                     if (make_hash_table){
-                        kmer_size = 5
-                        hash.tab <- allKmers(x = e_ref_prot,k = kmer_size,rename.duplicates = TRUE)
-                        hash_file <- file(e_prot_hash_rds_filename)
-                        saveRDS(object = hash.tab,file = hash_file)
-                        close(hash_file)
-                     }
-
-
-                     writeXStringSet(x = e_ref_prot,filepath = e_prot_ref_fa_filename)
-                  }
-
-               } else if (length(e_tx.gr) == 0 & file.exists(e_prot_ref_fa_filename)){
-                  # message('No CDS overlaps for event ',event)
-                  unlink(e_prot_ref_fa_filename)
-                  e_ref_prot <- AAStringSet()
-               }
-
-            }
-         } else {
-
-            message('No events; skipping generation of reference proteome.')
-         }
-      } else if (prot_ref_by == 'gene'){
-         foo <- sapply(X = blat_event_list,FUN = function(event) getProtSeq(diamond.df = diamond.df,blat.gr = blat.gr,event = event,
-                                                                            out_fa = file.path(np_ref.dir,paste0('event_',event,'_prot_ref.fa')),overwrite_ref = overwrite_ref ))
-         # parSapply.out <- mclapply(cl = cl, X = blat_event_list,FUN = function(event) getProtSeq(diamond.df = diamond.df,event = event,
-         #                                                                                            out_fa = file.path(np_ref.dir,paste0('event_',event,'_prot_ref.fa')),overwrite_ref = overwrite_ref))
-      }
-   }
-
-
-   # debug polyA_threshold = 15; min_length_novel = 2; merged_tx_only = TRUE;
    # Neopeptide Prediction ------
+   message('Predicting neopeptides...')
+   np.dir <- file.path(out.dir,'neopep')
+   if (!dir.exists(np.dir)){dir.create(np.dir)}
    neopep_fa_file <- file.path(np.dir,paste(sampleIdRNA,'_neopeptides.fa',sep=''))
    orf_csv_file <- file.path(np.dir,paste(sampleIdRNA,'_orfs.csv',sep=''))
    neopep_csv_file <- file.path(np.dir,paste(sampleIdRNA,'_neopeptides.csv',sep=''))
 
    tx_log_filename <- file.path(np.dir,paste(sampleIdRNA,'TX_to_NP_log.csv',sep='_'))
 
-   np_input_tx.df <- tx.df[tx.df$tpm >= tpm_threshold &
-                              # tx.df$inDiamond &
+
+   np_input_tx.df <- tx.df[tx.df$salmon_tpm >= tpm_threshold &
+                              tx.df$DNA_eventId %in% event_list &
                               tx.df$goodTranscript,]
+
 
    if (nrow(np_input_tx.df) > 0 & (!file.exists(orf_csv_file) | overwrite_np)){
       # loop over tx_seq via findORF ----
 
-      register(MulticoreParam(workers = numCores),default = TRUE)
-      tic()
-      # cl <- makeForkCluster(nnodes = numCores)
+      np_progress_logfile <- file.path(np.dir,'np.log')
+      cat(paste('Neopep prediction run',format(Sys.time())),file = np_progress_logfile,sep='\n',append = FALSE)
 
-      log.list <- unlist(bplapply(X = 1:nrow(np_input_tx.df),
-                                  FUN = function(t) findORF(tx_seq = np_input_tx.df[t,'tx'],
-                                                            tx_name = np_input_tx.df[t,'tx_num'],
-                                                            diamond.df = diamond.df,
-                                                            blat.gr = blat.gr,
-                                                            np.dir = np.dir,
-                                                            out.file = file.path(np.dir,'tx_out',paste0(np_input_tx.df[t,'tx_num'],'_ORF.csv')))$log))
-      # stopCluster(cl)
-      toc()
+      np.log.file <- file.path(np.dir,'np.out')
+      if (file.exists(np.log.file) & !overwrite_np){
+         np.out.lines <- readLines(np.log.file)
+         tx.blacklist <- sapply(X = np.out,FUN = function(i) strsplit(i,' ')[[1]][1],USE.NAMES = FALSE)
+      } else {
+         tx.blacklist <- ''
+      }
+      to_run <- which(!np_input_tx.df$tx_num %in% tx.blacklist)
+      if (length(to_run) > 0){
+         tic()
+
+         cl <- makeForkCluster(nnodes = numCores)
+
+         log.list <- clusterApply(cl = cl,x = to_run,
+                                  fun = function(t) tryCatch(findORF(tx_seq = np_input_tx.df[t,'tx'],
+                                                                     tx_name = np_input_tx.df[t,'tx_num'],
+                                                                     diamond.df = diamond.df,
+                                                                     blat.gr = blat.gr,
+                                                                     np.dir = np.dir,
+                                                                     overwrite_np = overwrite_np,
+                                                                     # tx.blacklist = tx.blacklist,
+                                                                     np.log.file = np.log.file,
+                                                                     out.file = file.path(np.dir,'tx_out',paste0(np_input_tx.df[t,'tx_num'],'_ORF.csv'))),
+                                                             error = function(err_msg) {cat(paste('TX',np_input_tx.df[t,'tx_num'],'neopep prediction failed with error:',err_msg),sep='\n',file = np_progress_logfile,append = TRUE); return()},
+                                                             warning = function(warn_msg) {cat(paste('TX',np_input_tx.df[t,'tx_num'],'neopep prediction failed with warning:',warn_msg),sep='\n',file = np_progress_logfile,append = TRUE); return()}
+                                                             # finally = cat(paste('TX',np_input_tx.df[t,'tx_num'],':',
+                                                             #                     ifelse(test = file.exists(file.path(np.dir,'tx_out',paste0(np_input_tx.df[t,'tx_num'],'_ORF.csv'))),
+                                                             #                            yes = 'ORF file exists',
+                                                             #                            no = 'no ORFs found')),sep='\n',file = np_progress_logfile,append = TRUE)
+                                  ))
+
+
+         stopCluster(cl)
+         toc()
+      }
+
+
       orf_files <- paste(file.path(np.dir,'tx_out'),list.files(path = file.path(np.dir,'tx_out')),sep='/')
-      cat(c("name" ,"seq","strand","frame",
-            "startPos" ,"endPos","startPosSign",
-            "endPosSign","lengthNT","lengthAA",
-            "n_kmers","gp_match","gene","exons","prot",
-            "break_pos","leading_aa","novel_length","novel_seq" ),
-          sapply(X = orf_files,FUN = function(i) paste0('\n',readLines(i)),USE.NAMES = FALSE),
-          file = orf_csv_file,append = FALSE)
-      orf.df <- read.table(file = orf_csv_file,fill = TRUE,header = TRUE)
+      if (length(list.files(path = file.path(np.dir,'tx_out/'))) > 0){
+         cat(c("name" ,"seq","strand","frame",
+               "startPos" ,"endPos","startPosSign",
+               "endPosSign","lengthNT","lengthAA",
+               "n_kmers","gp_match","gene","exons","prot",
+               "break_pos","leading_aa","novel_length","novel_seq" ),
+             sapply(X = orf_files,FUN = function(i) paste0('\n',readLines(i)),USE.NAMES = FALSE),
+             file = orf_csv_file,append = FALSE)
+         orf.df <- read.table(file = orf_csv_file,fill = TRUE,header = TRUE)
+         orf.df$tpm <- sapply(X = orf.df$name,USE.NAMES = FALSE,FUN = function(tx_name) salmon.df[salmon.df$Name == tx_name,'TPM'])
 
-      np_input_tx.df$np_out <- log.list
+         orf.df$breakpointA <- character(nrow(orf.df))
+         orf.df$breakpointB <- character(nrow(orf.df))
+         for (i_orf in 1:nrow(orf.df)){
+            bpA <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'DNA_posA'])
+            bpB <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'DNA_posB'])
+            chrA <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'chrA'])
+            chrB <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'chrB'])
+            if (length(bpA) == 1){
+               orf.df[i_orf,'breakpointA'] <- paste('chr',chrA,':',bpA,sep='')
+            } else {
+               orf.df[i_orf,'breakpointA'] <- paste('chr',chrA,':',bpA,sep='',collapse=';')
+            }
 
-      orf.df$tpm <- sapply(X = orf.df$name,USE.NAMES = FALSE,FUN = function(tx_name) tx.df[tx.df$tx_num == tx_name,'tpm'])
+            if (length(bpA) == 1){
+               orf.df[i_orf,'breakpointB'] <- paste('chr',chrB,':',bpB,sep='')
+            } else {
+               orf.df[i_orf,'breakpointB'] <- paste('chr',chrB,':',bpB,sep='',collapse=';')
+            }
 
-      np.df <- orf.df[orf.df$novel_length > 0,]
-      output[['np.df']] <- np.df
-
-
-      ## Modify tx.df with np_output -----
-      tx.df$np_output <- sapply(X = tx.df$tx_num, USE.NAMES = FALSE,
-                                FUN = function(i) ifelse(i %in% np_input_tx.df$tx_num,np_input_tx.df$np_out[np_input_tx.df$tx_num == i],'N/A'))
-      output$tx.df <- tx.df; output$orf.df = orf.df
-
-      # tx.df$np_output <- intruderPep.out[['tx_log']]
-      # write.table(x =data.frame('np_output'=log.list), file =  tx_log_filename,quote = FALSE,row.names = FALSE,col.names = TRUE)
-
-      # Modify orf.df with seq info ----
-      orf.df$breakpointA <- character(nrow(orf.df))
-      orf.df$breakpointB <- character(nrow(orf.df))
-      for (i_orf in 1:nrow(orf.df)){
-         bpA <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'DNA_posA'])
-         bpB <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'DNA_posB'])
-         chrA <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'chrA'])
-         chrB <- unique(seq.df[seq.df$DNA_eventId == getEventFromTxNum(orf.df[i_orf,'name']),'chrB'])
-         if (length(bpA) == 1){
-            orf.df[i_orf,'breakpointA'] <- paste('chr',chrA,':',bpA,sep='')
-         } else {
-            orf.df[i_orf,'breakpointA'] <- paste('chr',chrA,':',bpA,sep='',collapse=';')
          }
+         np.df <- orf.df[orf.df$novel_length > 0,]
+         np.df$event <- sapply(X = np.df$name, FUN = getEventFromTxNum,USE.NAMES = FALSE)
+         write.table(x = np.df,file = neopep_csv_file,quote = FALSE,row.names = FALSE,sep='\t')
+         write.table(x = orf.df, file = orf_csv_file,quote = FALSE,row.names = FALSE,sep='\t')
 
-         if (length(bpA) == 1){
-            orf.df[i_orf,'breakpointB'] <- paste('chr',chrB,':',bpB,sep='')
-         } else {
-            orf.df[i_orf,'breakpointB'] <- paste('chr',chrB,':',bpB,sep='',collapse=';')
-         }
+         # output[['orf.df']] <- orf.df
+         np.ss <- AAStringSet(x = np.df$novel_seq); names(np.ss) <- np.df$name
+         writeXStringSet(x = np.ss,filepath = neopep_fa_file)
+         output$orf.df = orf.df; output[['np.df']] <- np.df
+
+      } else {
+         orf.df <- data.frame()
+         np.df <- data.frame()
+
 
       }
-      # if (nrow(tx.df) > 0){
-      #    tx.df.filename <- ''
-      #       write.table(x = tx.df,file = tx.df.filename,quote = FALSE,col.names=TRUE,sep=',')
-      # }
-      output[['orf.df']] <- orf.df
-      np.ss <- AAStringSet(x = np.df$novel_seq); names(np.ss) <- np.df$name
-      writeXStringSet(x = np.ss,filepath = neopep_fa_file)
-   } else if (nrow(tx.df) > 0 & file.exists(neopep_fa_file ) & file.exists(neopep_csv_file) & !overwrite_np){ # if simply loading output files (overwrite = false)
+
+   } else if (nrow(tx.df) > 0 &  file.exists(neopep_csv_file) ){ # if simply loading output files (overwrite = false)
       #tx_log.df <- read.table(file = tx_log_filename,header=TRUE,as.is=TRUE,sep=',')
-      np.ss <- readAAStringSet(filepath = neopep_fa_file)
-      orf.df <- read.table(file = orf_csv_file,header=TRUE,as.is=TRUE,sep=',',fill = TRUE)
-      np.df <- read.table(file = neopep_csv_file,header = TRUE, as.is = TRUE,sep = ',')
+
+      orf.df <- read.table(file = orf_csv_file,header=TRUE,fill = TRUE,sep='\t')
+
       # tx_log <- read.table(file = tx_log_filename,header = TRUE,row.names = NULL,sep=',')
       # tx.df$np_output <- tx_log[,]
       output[['orf.df']] <- orf.df
-      output[['np.df']] <- np.df
-      output[['np.ss']] <- np.ss
 
-      if (!'np_output' %in% names(tx.df)){}
-   } else if (nrow(tx.df) == 0){
-
+      if (file.exists(neopep_fa_file )){
+         np.ss <- readAAStringSet(filepath = neopep_fa_file)
+         np.df <- read.table(file = neopep_csv_file,header = TRUE, fill = TRUE,sep='\t')
+         np.df$event <- sapply(X = np.df$name, FUN = getEventFromTxNum,USE.NAMES = FALSE)
+         output[['np.df']] <- np.df
+         output[['np.ss']] <- np.ss
+      }
+      # if (!'np_output' %in% names(tx.df)){
+      #
+      # }
+   } else {
+      orf.df <- data.frame()
+      np.df <- data.frame()
    }
+   blat_event_list <- unique(sapply(X = blat.gr$query,FUN = function(tx_num) getEventFromTxNum(tx_num = tx_num)))
+
+   message('Drawing plots...')
+   # Draw plots ----
+
+   cl <- makeForkCluster(nnodes = numCores)
+   clusterApply(cl = cl,x = blat_event_list,function(event) tryCatch(
+      runTxViz(ppdir = out.dir,event = event,
+               jct.gr = sort(getGRangesFromInputDF(seq.df = seq.df,event = event)),
+               tx_list = np_input_tx.df[which(np_input_tx.df$DNA_eventId == event),'tx_num'],
+               diamond_list =unique( diamond.df[diamond.df$query %in% np_input_tx.df[which(np_input_tx.df$DNA_eventId == event),'tx_num'],'query']),
+               np_list = np.df$name[np.df$name %in% np_input_tx.df[which(np_input_tx.df$DNA_eventId == event),'tx_num']],
+               overwrite_plots = overwrite_plots),
+      error = function(err_msg) message(paste('Drawing plots for event',
+                                              event,'gave the following error:\n',err_msg)),
+      warning = function(warn_msg) message(paste('Drawing plots for event',
+                                                 event,'gave the following warning:\n',warn_msg)),
+      finally = message('Plots done for event ',event)))
+   stopCluster(cl)
+
+   # tx_viz_out <- bplapply(X = blat_event_list,
+   #                        FUN = function(event) runTxViz(ppdir = out.dir, event = event,
+   #                                                       jct.gr = sort(getGRangesFromInputDF(seq.df = seq.df,event = event)),
+   #                                                       tx_list = np_input_tx.df[which(np_input_tx.df$DNA_eventId == event),'tx_num'],
+   #                                                       diamond_list =unique( diamond.df[diamond.df$query %in% np_input_tx.df[which(np_input_tx.df$DNA_eventId == event),'tx_num'],'query']),
+   #                                                       np_list = np.df$name[np.df$name %in% np_input_tx.df[which(np_input_tx.df$DNA_eventId == event),'tx_num']],
+   #                                                       overwrite_plots = overwrite_plots) )
+
+
    # Create and populate event.df ----
+   message('Summarizing events...')
    event.df <- unique(seq.df[,c('RNA_folderId','DNA_eventId',
                                 'RNA_RPs',
                                 'DNA_RPs',
@@ -463,7 +401,7 @@ intruderPipe <- function(reads.filename = NA,
 
       event.df[i,'nTX'] <- nrow(i_tx.df)
       event.df[i,'nTX_filtered'] <- sum(i_tx.df$tx_num %in% np_input_tx.df$tx_num)
-      event.df[i,'event_tpm'] <- sum(quant.df$TPM[sapply(quant.df$Name,getEventFromTxNum,USE.NAMES = FALSE) == event.df[i,'DNA_eventId']])
+      event.df[i,'event_tpm'] <- sum(salmon.df$TPM[sapply(salmon.df$Name,getEventFromTxNum,USE.NAMES = FALSE) == event.df[i,'DNA_eventId']])
       # if (file.exists(i_ref_filename)){
       #    event.df[i,'nRefProt'] <- sum(grepl('>',readLines(i_ref_filename))) #ie 'event_122_prot_ref.fa'
       # } else {
@@ -510,6 +448,7 @@ intruderPipe <- function(reads.filename = NA,
    if (!dir.exists(file.path(out.dir,'reports'))){dir.create(file.path(out.dir,'reports'))}
 
    # Run caseSummary() ----
+   message('Collecting case summary...')
    case.df <- caseSummary(caseId = caseId,
                           sampleIdRNA = sampleIdRNA,
                           sampleIdDNA = sampleIdDNA,
@@ -528,17 +467,77 @@ intruderPipe <- function(reads.filename = NA,
    output[['jct.df']] <- jct.df
    output[['geneExpression.df']] <- geneExpression.df
 
-   if (cleanup_files){
-
-   }
+   # if (cleanup_files){
+   #
+   # }
 
    saveRDS(output,file = file.path(out.dir,paste(sampleIdRNA,'.rds',sep='')))
    return(output)
 }
 
-blat <- function(stringset,filename,directory,
-                 ref_stringset_file = gen_ref_path,
-                 allow_small_segments = FALSE){
+blat <- function(event.dir,overwrite_tx,jct.gr){
+   # blat against genomic region ----
+   assembled_tx_out.fa <- file.path(event.dir,'good.transcripts.fa')
+   alignment.outfile <- file.path(event.dir,'good.transcripts.alignments.tsv')
+   blat.dir <- file.path(event.dir,'blat')
+   blat.outfile <- file.path(blat.dir,'blat.out.psl')
+   if (file.exists(assembled_tx_out.fa) & ( !file.exists(blat.outfile) | overwrite_tx)){
+
+      if (!dir.exists(blat.dir)){dir.create(blat.dir)}
+      blatA.outfile <- file.path(blat.dir,'blatA.out.psl')
+      blatB.outfile <- file.path(blat.dir,'blatB.out.psl')
+      # blat.outfile <- file.path(blat.dir,'blat.out.psl')
+      blatA.cmd <- paste('blat',
+                         paste0('/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.2bit:',
+                                as.character(jct.gr[1])),
+                         assembled_tx_out.fa,blatA.outfile,
+                         '-ooc=/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38.11.ooc -fine -q=rna -maxGap=1 -out=blast8 &> /dev/null')
+      blatB.cmd <- paste('blat',
+                         paste0('/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.2bit:',
+                                as.character(jct.gr[2])),
+                         assembled_tx_out.fa,blatB.outfile,
+                         '-ooc=/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38.11.ooc -fine -q=rna -maxGap=1 -out=blast8 &> /dev/null')
+      system(blatA.cmd)
+      system(blatB.cmd)
+      cat.cmd <- paste('cat',blatA.outfile,blatB.outfile,'>',blat.outfile)
+      system(cat.cmd)
+      if (length(readLines(blat.outfile)) == 0){return(GRanges())}
+   }
+
+
+   blast8_names <- c('query','chr','percent_id','alignment_length','mismatches','gap_o',
+                     'query_start','query_end','subject_start','subject_end','E_value','bit_score')
+   blat_results <- read.table(blat.outfile,header = FALSE,sep = '\t',col.names = blast8_names,stringsAsFactors = FALSE)
+
+
+
+   blat_results$region <- blat_results$chr
+   blat_results$chr <- sapply(strsplit(blat_results$region,':'),FUN='[',1)
+
+   blat_results$subject_start <- blat_results$subject_start + as.integer(sapply(strsplit(blat_results$region,':|-'),FUN='[',2))
+   blat_results$subject_end <- blat_results$subject_end + as.integer(sapply(strsplit(blat_results$region,':|-'),FUN='[',2))
+   blat_results$strand <- ifelse(blat_results$subject_end - blat_results$subject_start > 0,'+','-')
+   blat_results[blat_results$subject_end - blat_results$subject_start < 0,c('subject_start','subject_end')] <- blat_results[blat_results$subject_end - blat_results$subject_start < 0,c('subject_end','subject_start')]
+
+
+   blat.gr <- makeGRangesFromDataFrame(df = blat_results,keep.extra.columns = TRUE,ignore.strand = FALSE,seqnames.field = 'chr',
+                                       start.field = 'subject_start',end.field = 'subject_end')
+   write.table(x = blat.gr,file = alignment.outfile,sep='\t',quote = FALSE,row.names = FALSE)
+   return(blat.gr)
+}
+
+annotateBlat <- function(tx.gr){
+   edb <- EnsDb(x = system.file('extdata/EnsDb.Hsapiens.v105.sqlite',package='EnsDb.Hsapiens.v105'))
+   on.exit(RSQLite::dbDisconnect(dbconn(edb)))
+   seqlevelsStyle(edb) <- "UCSC"
+
+
+}
+
+
+blat_deprecated <- function(stringset,filename,directory,
+                            ref_stringset_file = gen_ref_path,
+                            allow_small_segments = FALSE){
    # debug
    # blat.dir <- file.path(out.dir,'blat');    filename = sampleIdRNA;
    # tx.ss <- DNAStringSet(tx.df$TX,use.names = TRUE) ;   tx.df.names <- tx.df$tx_num;   names(tx.ss) <- tx.df.names
@@ -1440,7 +1439,7 @@ caseSummary <- function(caseId,sampleIdRNA,sampleIdDNA,tx.df,jct.df,orf.df,event
             txScore <- e_tx.df[iTX,'score']
             txLength <- nchar(txSeq)
             txSpanContigs <- e_tx.df[iTX,'nSpanningContigs']
-            txTPM <- e_tx.df[iTX,'tpm']
+            txTPM <- as.numeric(e_tx.df[iTX,'tpm'])
             # t_blat.gr <- blat.gr[blat.gr$query == txName]
             # txBlat <- paste(seqnames(t_blat.gr),paste(ranges(t_blat.gr)),sep=':',collapse=';')
             # # foo <- subsetByOverlaps(x = unlist(cdsBy(x = edb.ucsc,filter = GRangesFilter(c(t_blat.gr,invertStrand(t_blat.gr))))),ranges = t_blat.gr,ignore.strand = TRUE)
@@ -1451,7 +1450,7 @@ caseSummary <- function(caseId,sampleIdRNA,sampleIdDNA,tx.df,jct.df,orf.df,event
             # }
 
             t_orf.df <- orf.df[orf.df$name == e_tx.df[iTX,'tx_num'],]
-            orfOut <- ifelse(!e_tx.df[iTX,'np_output'] %in% c('N/A',''),e_tx.df[iTX,'np_output'],'')
+            orfOut <- '' # ifelse(!e_tx.df[iTX,'np_output'] %in% c('N/A',''),e_tx.df[iTX,'np_output'],'')
             if (nrow(t_orf.df) > 0){
 
                for (iORF in 1:nrow(t_orf.df)){
@@ -1876,31 +1875,47 @@ plotJunctionTX <- function(tx.gr,e_reads.gr,pos.gr,out.file = NA,
 
 }
 
-runTxViz <- function(event.dir,event.tx.fa = NA,overwrite_plots = FALSE){
-   event.blat.gr <- makeGRangesFromDataFrame(df = read.table(file = file.path(event.dir,'good.transcripts.alignments.tsv'),sep=' ',stringsAsFactors = FALSE,header = TRUE),
+runTxViz <- function(ppdir = NA,event = NA,jct.gr = NA,overwrite_plots = FALSE,tx_list = NA,diamond_list = NA, np_list = NA){
+
+   event0 <- formatC(x = event,width = 3,flag = 0,format = 'd')
+   event.tx.dir <- file.path(ppdir,'assembly/by_event',paste0('event_',event0))
+   event.tx.fa <- file.path(event.tx.dir,'good.transcripts.fa')
+   event.blat.gr <- makeGRangesFromDataFrame(df = read.table(file = file.path(event.tx.dir,'good.transcripts.alignments.tsv'),stringsAsFactors = FALSE,header = TRUE),
                                              keep.extra.columns = TRUE)
-   if (!exists('event.tx.fa') || is.null(event.tx.fa)){event.tx.fa <- file.path(event.dir,'good.transcripts.fa')}
-   jct.gr <- makeGRangesFromDataFrame(df = read.table(file.path(event.dir,'event.txt'),sep=' '))
+
+   event.blat.gr <- event.blat.gr[event.blat.gr$query %in% tx_list]
+   if (length(event.blat.gr) == 0){
+      return()
+   }
+   event.blat.gr$diamond_np <- ifelse(event.blat.gr$query %in% np_list,
+                                      yes = 'neopep',
+                                      no = ifelse(event.blat.gr$query %in% diamond_list,
+                                                  yes = 'diamond',no = 'none'))
+   # event.blat.gr$diamond <- event.blat.gr$query %in% diamond_list; event.blat.gr$neopep <- event.blat.gr$query %in% np_list
+
    if (overlapsAny(jct.gr[1],jct.gr[2])){jct.gr <- range(jct.gr)}
-   event.bam <- file.path(event.dir,'event.bam')
-   span.bam <- file.path(event.dir,'span.bam')
+   event.bam <- file.path(ppdir,'assembly/by_event',paste('event',event0,sep='_'),'raw_input/event.bam')
+   span.bam <- file.path(ppdir,'assembly/by_event',paste('event',event0,sep='_'),'raw_input/span.bam')
+
+   plot.dir <- file.path(ppdir,'figures')
+   if (!dir.exists(plot.dir)){dir.create(plot.dir)}
 
    if (length(jct.gr) == 1){
-      out.pdf <- file.path(event.dir,'region.pdf')
+      out.pdf <- file.path(plot.dir,paste0(event0,'.pdf'))
       if (!file.exists(out.pdf) | overwrite_plots){
-         txViz(tx.gr = event.blat.gr,tx.fa = event.tx.fa,pos.gr = jct.gr,all.bam = event.bam,span.bam = span.bam,out.pdf = out.pdf)
+         txViz(tx.gr = event.blat.gr,pos.gr = jct.gr,all.bam = event.bam,span.bam = span.bam,out.pdf = out.pdf)
       }
 
 
    } else if (length(jct.gr) == 2){
-      outA.pdf <- file.path(event.dir,'regionA.pdf')
+      outA.pdf <- file.path(plot.dir,paste0(event0,'_A.pdf'))
       if (!file.exists(outA.pdf) | overwrite_plots){
-         txViz(tx.gr = event.blat.gr,tx.fa = event.tx.fa,pos.gr = jct.gr[1],all.bam = event.bam,span.bam = span.bam,out.pdf = outA.pdf)
+         txViz(tx.gr = event.blat.gr,pos.gr = jct.gr[1],all.bam = event.bam,span.bam = span.bam,out.pdf = outA.pdf)
       }
 
-      outB.pdf <- file.path(event.dir,'regionB.pdf')
+      outB.pdf <- file.path(plot.dir,paste0(event0,'_B.pdf'))
       if (!file.exists(outB.pdf) | overwrite_plots){
-         txViz(tx.gr = event.blat.gr,tx.fa = event.tx.fa,pos.gr = jct.gr[2],all.bam = event.bam,span.bam = span.bam,out.pdf = outB.pdf)
+         txViz(tx.gr = event.blat.gr,pos.gr = jct.gr[2],all.bam = event.bam,span.bam = span.bam,out.pdf = outB.pdf)
       }
 
 
@@ -1908,10 +1923,17 @@ runTxViz <- function(event.dir,event.tx.fa = NA,overwrite_plots = FALSE){
 
 }
 
-txViz <- function(tx.gr,tx.fa,pos.gr,all.bam,span.bam,out.pdf){
+txViz <- function(tx.gr,pos.gr,all.bam,span.bam,out.pdf){
    # aligned.bam = '/research/labs/experpath/vasm/shared/NextGen/Projects/Neoantigens/RNAseq/NE48501/GRCh38/intruder/tx/event_145/aligned.bam'
    # chimeric.bam = '/research/labs/experpath/vasm/shared/NextGen/Projects/Neoantigens/RNAseq/NE48501/GRCh38/intruder/tx/event_145/chimeric.bam'
    # tx.fa = fa_for_viz
+
+   edb <- EnsDb(x = system.file('extdata/EnsDb.Hsapiens.v105.sqlite',package='EnsDb.Hsapiens.v105'))
+   seqlevelsStyle(x = edb) <- 'UCSC'
+   # edb <- useMySQL(x = EnsDb.Hsapiens.v105, user = '',pass = '',host = 'localhost')
+   on.exit(RSQLite::dbDisconnect(dbconn(edb)))
+
+   # seqlevelsStyle(edb) <- "UCSC"
    options(ucscChromosomeNames = TRUE)
    if (any(seqlevelsStyle(pos.gr) != 'UCSC')){seqlevelsStyle(pos.gr) <- 'UCSC'};
    if (any(seqlevelsStyle(tx.gr) != 'UCSC')){seqlevelsStyle(tx.gr) <- 'UCSC'};
@@ -1926,10 +1948,11 @@ txViz <- function(tx.gr,tx.fa,pos.gr,all.bam,span.bam,out.pdf){
 
 
    tx_ol.gr <- subsetByOverlaps(x = tx.gr,ranges = pos.gr,ignore.strand = TRUE)
-   suppressWarnings(cds.gr <- cdsBy(x = edb.ucsc,filter = GRangesFilter(value = pos.gr), by = 'gene'))
+   if (length(tx_ol.gr) == 0){return()}
+   suppressWarnings(cds.gr <- cdsBy(x = edb,filter = GRangesFilter(value = pos.gr), by = 'gene'))
 
    if (!is.null(cds.gr)){
-      suppressWarnings(gr <- getGeneRegionTrackForGviz(edb.ucsc,
+      suppressWarnings(gr <- getGeneRegionTrackForGviz(edb,
                                                        chromosome = as.character(seqnames(pos.gr)),
                                                        start = start(pos.gr),end = end(pos.gr),
                                                        featureIs = 'gene_biotype'))
@@ -1961,10 +1984,13 @@ txViz <- function(tx.gr,tx.fa,pos.gr,all.bam,span.bam,out.pdf){
                               groupAnnotation = 'id',
                               genome =  'hg38',
                               fontsize.group=12,
+                              feature = 'diamond_np',
                               featureAnnotation = 'feature',
                               transcriptAnnotation = 'symbol',shape = 'arrow',
                               showFeatureId = FALSE,
-                              match = 'red',no_match = 'gray')#,
+                              diamond = 'blue',
+                              neopep = 'red',none = 'gray')#,
+   feature(txTrack) <- tx_ol.gr$diamond_np
    trackSizes = c(.075,.075,
                   .2,.2,
                   .3,
@@ -2014,7 +2040,7 @@ runGMAP <- function(input.fa,gmap.out.dir){
 
 runDiamond <- function(tx.dir,input.fa){
    # Align against reference TX ----
-
+if (!file.exists(input.fa)){return(data.frame())}
 
    tx_ref_file <- '/research/labs/experpath/vasm/shared/Genome/Human/referenceFiles/transcriptome/gencode.v39.transcripts.fa'
    diamond_gencode_ref_path <- '/research/labs/experpath/vasm/shared/NextGen/judell/data/Reference/gencode.v39.prot'
@@ -2023,11 +2049,11 @@ runDiamond <- function(tx.dir,input.fa){
    if (!dir.exists(diamond.dir)){dir.create(diamond.dir)}
    diamond.outfile <- file.path(diamond.dir,'matches.tsv')
    diamond.cmd <- paste('diamond blastx -f 6 qseqid sseqid pident length mismatch gapopen qstrand qframe qlen qstart qend qcovhsp slen sstart send scovhsp evalue bitscore full_sseq qseq_translated',
-                        '-iterate',#'-e 1e-8 --top 0.1',
+                        '--iterate',#'-e 1e-8 --top 0.1',
                         '-d',diamond_gencode_ref_path,
                         '-q',input.fa,
                         '-o', diamond.outfile)
-   system(diamond.cmd,ignore.stdout = TRUE, ignore.stderr =  TRUE)
+   system(diamond.cmd,ignore.stdout = TRUE,ignore.stderr = TRUE)
 
    #  Additional Output Options:
    # qseq means Aligned part of query sequence
@@ -2072,4 +2098,26 @@ runDiamond <- function(tx.dir,input.fa){
       # diamond_out_tx.fa <- diamond_out_tx.fa
    }
    return(diamond.df)
+}
+
+kallisto <- function(transripts.fa,out.dir,numCores){
+   kallisto.path <- '/research/bsi/tools/biotools/kallisto/0.46.1/kallisto'
+   kallisto.log <- file.path(out.dir,'kallisto.log')
+   kallisto.idx <- '/research/labs/experpath/vasm/shared/data6/Genome/iGenomes/Homo_sapiens/NCBI/GRCh38/Sequence/KallistoIndex/homo_sapiens/transcriptome.idx'
+   index.command <- paste(kallisto.path,'index')
+   quant.cmd <- paste(kallisto.path,'quant','-t',numCores,'-fusion',
+                      '-i',kallisto.idx,
+                      '-o',out.dir,
+                      reads1,reads2,'>',kallisto.log
+   )
+   system(quant.cmd)
+   kallisto.df <- read.table()
+   # /research/bsi/tools/biotools/kallisto/0.46.1/kallisto quant -t 24
+   # -i /research/labs/experpath/vasm/shared/data6/Genome/iGenomes/Homo_sapiens/NCBI/GRCh38/Sequence/KallistoIndex/homo_sapiens/transcriptome.idx
+   # -o /research/labs/experpath/vasm/shared/NextGen/judell/data/MCF7/spades/kallisto
+   # --fusion
+   # /research/labs/experpath/vasm/shared/data6/NextGen/Projects/Neoantigens/RNAseq/NE48501/MCF7_RNA_S116_L003_R1_001.fastq.gz /research/labs/experpath/vasm/shared/data6/NextGen/Projects/Neoantigens/RNAseq/NE48501/MCF7_RNA_S116_L003_R2_001.fastq.gz
+   # > /research/labs/experpath/vasm/shared/NextGen/judell/data/MCF7/spades/kallisto/out.log
+
+
 }
