@@ -60,6 +60,7 @@ intruderAssembly <- function(reads.filename,tx.dir,file.prefix,
                              cov_cutoff = 'dynamic',
                              overwrite_tx = TRUE,
                              overwrite_plots = FALSE,
+                             overwrite_raw_files = FALSE,
                              # take.rc = FALSE,
                              cleanup = FALSE,
                              numCores = 12,
@@ -75,7 +76,7 @@ intruderAssembly <- function(reads.filename,tx.dir,file.prefix,
    #optimize_velvet <- method == 'velvet_optimizer'
 
 
-   COV_CUTOFF <- cov_cutoff
+   # COV_CUTOFF <- cov_cutoff
    seq.df <- loadRNAReads(reads.filename)
    # message(paste('Loaded ',nrow(seq.df), ' spanning RNA RPs','...',sep=''))
 
@@ -91,7 +92,7 @@ intruderAssembly <- function(reads.filename,tx.dir,file.prefix,
 
    # tx.df.filename <- file.path(tx.dir,paste(file.prefix,'TX.csv',sep='_'))
 
-   event_list <- sort(unique(seq.df$DNA_eventId[seq.df$RNA_RPs >= reads.threshold]))
+   event_list <- as.integer(names(table(seq.df$DNA_eventId))[table(seq.df$DNA_eventId) >= reads.threshold])
 
    if (length(event_list) == 0){message('No events meet reads threshold.')}
 
@@ -103,96 +104,110 @@ intruderAssembly <- function(reads.filename,tx.dir,file.prefix,
 
    DNA_sampleId = unique(seq.df$DNA_sampleId)
 
-   # Pre-process event info in parallel ----
-   overwrite_raw_files = FALSE
-   check_spades = TRUE
-   cl <- makeForkCluster(spec = getOption('cl.cores',numCores))
-   tic()
-   parSapply.out <- parSapplyLB(cl = cl, X = event_list,FUN = function(i) eventwiseDeNovoAssemblyPrep(seq.df = seq.df,event = i,tx.dir = tx.dir,overwrite = overwrite_raw_files) )
-   parSapply.out <- parSapplyLB(cl = cl, X = event_list,FUN = function(event) runSpades(seq.df = seq.df,tx.dir = tx.dir,event = event,overwrite_tx = overwrite_tx,check_spades = check_spades,use_preRR = use_preRR) )
+   # Pre-process event info & runSpades() in parallel ----
 
+   # check_spades = TRUE
+   use_preRR <- TRUE
+
+   if (!overwrite_tx){
+      spanning_dir_list <- file.path(tx.dir,paste0('event_',formatC(x = event_list,format = 'd',flag = 0,width = 3)),'spanning')
+
+
+      good_tx_fa_list <- file.path(tx.dir,paste0('event_',formatC(x = event_list,format = 'd',flag = 0,width = 3)),'good.transcripts.fa')
+      event_list <- event_list[file.exists(good_tx_fa_list)]
+   }
+   tx_progress_logfile <- file.path(tx.dir,'tx.log')
+
+
+   cat(paste('runSpades called on',format(Sys.time()),'over',numCores,'threads:','\n'),append = FALSE,file = tx_progress_logfile)
+   tic()
+   closeAllConnections()
+   cl <- makeForkCluster(nnodes = min(numCores,length(event_list)))
+   # if (length(event_list) < numCores){register(MulticoreParam(workers = 4),default = TRUE)} else {register(MulticoreParam(workers = numCores),default = TRUE)}
+   dna_prep_out <- clusterApply(cl = cl,x = event_list,fun = function(i) eventwiseDeNovoAssemblyPrep(seq.df = seq.df,event = i,tx.dir = tx.dir,overwrite = overwrite_raw_files,chimeric.bam = chimeric.bam,aligned.bam = aligned.bam) )
+   runSpades_out <- clusterApply(cl = cl,x = event_list,
+                                 fun  = function(event) tryCatch(runSpades(event = event,
+                                                                           seq.df = seq.df,
+                                                                           tx.dir = tx.dir,
+                                                                           overwrite_tx = overwrite_tx,
+                                                                           use_preRR = use_preRR,
+                                                                           pause = TRUE),
+                                                                 error = function(err_msg) {cat(paste('Event',event,'first pass assembly failed with error:',err_msg),sep='\n',file = tx_progress_logfile,append = TRUE); return('error')},
+                                                                 warning = function(warn_msg) {cat(paste('Event',event,'first pass assembly failed with warning:',warn_msg),sep='\n',file = tx_progress_logfile,append = TRUE); return('warning')},
+                                                                 finally = cat(paste('Event',event,'yielded',
+                                                                                     ifelse(test = file.exists(file.path(tx.dir,paste0('event_',formatC(x = event,format = 'd',flag = 0,width = 3)),'good.transcripts.fa')),
+                                                                                            yes = countFastaEntries(file.path(tx.dir,paste0('event_',formatC(x = event,format = 'd',flag = 0,width = 3)),'good.transcripts.fa')),
+                                                                                            no = 0),'transcripts.\n'),file = tx_progress_logfile,append = TRUE)))
+   stopCluster(cl = cl)
    toc()
-   stopCluster(cl)
-   # quick run for debugging purposes if necessary
-   if (FALSE){
-      foo <- sapply(X = event_list,FUN = function(event) runSpades(seq.df = seq.df,tx.dir = tx.dir,event = event,overwrite_tx = overwrite_tx,check_spades = check_spades) )
+   spades_out_files <- system(command = paste('ls',file.path(tx.dir,'event_*/good.transcripts.fa')),intern=TRUE)
+
+   remaining_events <- event_list[sapply(X = event_list,FUN = function(i) !any(grepl(formatC(x = i,width = 3,format = 'd',flag = 0),spades_out_files)),USE.NAMES = FALSE)]
+   n_cycles = 0
+   numCores_in_loop <- numCores
+   # cl <- makeForkCluster(nnodes = numCores/2)
+   # length(remaining_events)
+   # message(length(remaining_events),' events left to be assembled...')
+   while (length(remaining_events) > 0 & n_cycles < 5){
+
+      numCores_in_loop <- ifelse(test = numCores_in_loop <= length(remaining_events),
+                                 yes = numCores_in_loop,
+                                 no = max(numCores_in_loop/2,1))
+      cl <- makeForkCluster(nnodes = numCores_in_loop)
+
+      message('Event(s) ',paste(remaining_events,collapse=', '),' events left to be assembled...')
+
+      runSpades_out <- clusterApply(cl = cl,x = event_list,
+                                    fun  = function(event) tryCatch(runSpades(event = event,
+                                                                              seq.df = seq.df,
+                                                                              tx.dir = tx.dir,
+                                                                              overwrite_tx = overwrite_tx,
+                                                                              use_preRR = use_preRR,
+                                                                              pause = TRUE),
+                                                                    error = function(err_msg) {cat(paste('Event',event,'second+ pass assembly failed with error:',err_msg),sep='\n',file = tx_progress_logfile,append = TRUE); return('error')},
+                                                                    warning = function(warn_msg) {cat(paste('Event',event,'second+ pass assembly failed with warning:',warn_msg),sep='\n',file = tx_progress_logfile,append = TRUE); return('warning')},
+                                                                    finally = cat(paste('Event',event,'yielded',
+                                                                                        ifelse(test = file.exists(file.path(tx.dir,paste0('event_',formatC(x = event,format = 'd',flag = 0,width = 3)),'good.transcripts.fa')),
+                                                                                               yes = countFastaEntries(file.path(tx.dir,paste0('event_',formatC(x = event,format = 'd',flag = 0,width = 3)),'good.transcripts.fa')),
+                                                                                               no = 0),'transcripts.\n'),file = tx_progress_logfile,append = TRUE)))
+
+
+      # try(runSpades_out <- clusterApply(cl = cl,x = remaining_events,fun  = function(event) try(runSpades(event = event,seq.df = seq.df,tx.dir = tx.dir,overwrite_tx = overwrite_tx,use_preRR = use_preRR,pause = TRUE))))
+      spades_out_files <- system(command = paste('ls',file.path(tx.dir,'event_*/good.transcripts.fa')),intern=TRUE)
+      remaining_events <- event_list[sapply(X = event_list,FUN = function(i) !any(grepl(formatC(x = i,width = 3,format = 'd',flag = 0),spades_out_files)),USE.NAMES = FALSE)]
+      n_cycles = n_cycles + 1
+      stopCluster(cl = cl)
    }
 
+   # runSpades_out <- clusterApply(cl = cl,x = remaining_events,fun  = function(event) try(runSpades(event = event,seq.df = seq.df,tx.dir = tx.dir,overwrite_tx = overwrite_tx,check_spades = check_spades,use_preRR = use_preRR,pause = TRUE)))
+
+   # stopCluster(cl = cl)
+   toc()
 
    # Cat results ----
    ## TX.csv
    all_TX.csv <- file.path(tx.dir,paste0(file.prefix,'_TX.csv'))
-   TX.csv_file_list <- sapply(X = event_list,FUN = function(i) file.path(tx.dir,paste0('event_',i),'TX.csv')) # system(command = paste('ls',file.path(tx.dir,'event_*/TX.csv')),intern=TRUE)
+   TX.csv_file_list <- sapply(X = event_list,FUN = function(i) file.path(tx.dir,paste0('event_',formatC(x = i,width = 3,flag = 0,format = 'd')),'TX.csv')) # system(command = paste('ls',file.path(tx.dir,'event_*/TX.csv')),intern=TRUE)
+   TX.csv_file_list <- TX.csv_file_list[file.exists(TX.csv_file_list)]
    # cat tx.dir/event_*/TX.csv[1] > all_TX.csv && cat $(head --lines=-1 tx.dir_event/TX.csv[all-but-1]) >> all_TX.csv
-   system(command = paste('cat',TX.csv_file_list[1],'>',all_TX.csv,'&& awk FNR-1',paste(TX.csv_file_list[-1],collapse=' '),' >>',all_TX.csv))
-   tx.df <- read.table(all_TX.csv,header = TRUE,sep=',',stringsAsFactors = FALSE)#; tx.df <- tx.df[-which(tx.df$DNA_sampleId == 'DNA_sampleId'),]
 
-   ## good.transcripts.fa
-   all_assembled_tx.fa <- file.path(tx.dir,'transcripts.fa')
-   system(command = paste('cat',file.path(tx.dir,'event_*/good.transcripts.fa'),'>',all_assembled_tx.fa))
+   if (length(TX.csv_file_list) > 0){
+      system(command = paste('cat',TX.csv_file_list[1],'>',all_TX.csv,'&& awk FNR-1',paste(TX.csv_file_list[-1],collapse=' '),' >>',all_TX.csv))
+      tx.df <- read.table(all_TX.csv,header = TRUE,sep=',',stringsAsFactors = FALSE)#; tx.df <- tx.df[-which(tx.df$DNA_sampleId == 'DNA_sampleId'),]
 
-   tx.df$goodTranscript <- tx.df$tx_num %in% getFastaHeader(fasta_file = all_assembled_tx.fa)
-   ## blat.gr
-   all_blat.tsv <- file.path(tx.dir,'TX_mapping.tsv')
-   TX.blat_file_list <- sapply(X = event_list,FUN = function(i) file.path(tx.dir,paste0('event_',i),'good.transcripts.alignments.tsv'))
-   system(command = paste('cat',TX.blat_file_list[1],'>',all_blat.tsv,'&& awk FNR-1',paste(TX.blat_file_list[-1],collapse=' '),' >>',all_blat.tsv))
-   #system(command = paste('cat',file.path(tx.dir,'event_*/good.transcripts.alignments.tsv'),'>',all_blat.tsv))
+      ## good.transcripts.fa
+      all_assembled_tx.fa <- file.path(tx.dir,'transcripts.fa')
+      system(command = paste('cat',file.path(tx.dir,'event_*/good.transcripts.fa'),'>',all_assembled_tx.fa))
 
-   # fasta_header_match <- sapply(X = event_list,FUN = function(i) any(!getFastaHeader(fasta_file = file.path(tx.dir,paste0('event_',i),'good.transcripts.fa')) %in% getFastaHeader(fasta_file = file.path(tx.dir,paste0('event_',i),'transrate/spades/good.spades.fa'))))
-
-
-   # unfiltered_rev_tx.fa <- file.path(tx.dir,'unfiltered_transcripts_rc.fa')
-   # unfiltered_tx.fa <- file.path(tx.dir,'unfiltered_transcripts.fa')
-   # unfiltered_tx_w_rc.fa <- file.path(tx.dir,'unfiltered_tx_w_rc.fa')
-   # if (!file.exists(unfiltered_tx.fa)){
-   #    cat.cmd <- paste0('cat $(ls ',file.path(tx.dir,'*/transrate/spades/good.spades.fa'),') ','>',unfiltered_tx.fa)
-   #    system(cat.cmd)
-   #    #
-   #    #       rc.cmd <- paste('seqtk seq -r',unfiltered_tx.fa,'| sed "/^>/s/$/_rc/" - > ',unfiltered_rev_tx.fa)
-   #    #       system(rc.cmd)
-   #    #       cat2.cmd <- paste('cat',unfiltered_tx.fa,unfiltered_rev_tx.fa,'>',unfiltered_tx_w_rc.fa)
-   #    #       system(cat2.cmd)
-   # }
-
-
-   #diamond.df$query_coverage <-diamond.df$alignment_length * 3 / diamond.df$query_length
-
-   salmon_input.fa <- all_assembled_tx.fa
-
-
-
-   #tx_list <- sub('>','',system(paste('grep ">"',unfiltered_tx.fa),intern=TRUE))
-   # check
-   # diamond_all.fa <- file.path(diamond.dir,'diamond_all.fa')
-   # diamond_list_file <- file.path(diamond.dir,'diamond.list')
-   #
-   # writeLines(diamond.df$query,diamond_list_file)
-   # all_hits_to_fa.cmd <- paste('seqtk subseq',unfiltered_tx.fa,diamond_list_file,'>',diamond_all.fa)
-   # system(all_hits_to_fa.cmd)
-
-
-
-   #tx.df$inDiamond <- tx.df$tx_num %in% diamond.df$query
-
-   # tx.df <- tx.df[tx.df$tx_num %in% quant.df$Name,]
-   # tx.gr <- tx.gr[tx.gr$query %in% quant.df$Name,]
-
-   ## output ----
-   tx_csv_file <- file.path(tx.dir,paste(file.prefix,'TX.csv',sep='_'))
-   if ((file.exists(tx_csv_file) & overwrite_tx) | !file.exists(tx_csv_file)){
-      unlink(tx_csv_file)
-      write.csv(x = tx.df,file = tx_csv_file,quote = FALSE,row.names = FALSE)
-   }
-   tx_gr.csv <- file.path(tx.dir,'tx.alignment.csv')
-   if ((file.exists(tx_gr.csv) & overwrite_tx) | !file.exists(tx_gr.csv)){
-      unlink(tx_gr.csv)
-      write.csv(x = tx.gr,file = tx_gr.csv,quote = FALSE,row.names = FALSE)
+      tx.df$goodTranscript <- tx.df$tx_num %in% getFastaHeader(fasta_file = all_assembled_tx.fa)
+   } else {
+      message('No TX loaded!')
+      tx.df <- data.frame()
    }
 
 
 
-   output <- list('tx.df' = tx.df,'tx.gr' = tx.gr)
-   return(output)
+   return(tx.df)
 
 }
 
@@ -204,7 +219,7 @@ getFastaHeader <- function(fasta_file){
 
 countFastaEntries <- function(fasta_file){
    # grep "^>" <filename> | sed 's/;/,/g'
-   if (file.exists(fasta_file)){
+   if (file.exists(fasta_file) && file.size(fasta_file) > 0){
       header_count <- as.integer(system(command = paste('grep -c "[>@]"',fasta_file),intern=TRUE))
    } else {
       header_count <- 0
@@ -504,59 +519,6 @@ spanningRPsPreProcessing <- function(seq.df,event,event.tx.dir,
       span1.fq = ''; span2.fq = ''
    }
 
-   #out.file <- file.path(event.tx.dir,paste(file.prefix,'_event_',event,'.fa',sep=''))
-   # if (nrow(e_seq.df) > flash.threshold){
-   #    flash.out <- flash(e_seq.df,event,event.tx.dir,out.prefix = out.prefix)
-   #    RP.ss <- flash.out[['pairs']]
-   #    cRP.ss <- flash.out[['combined']]
-   #
-   #    readsPP.out <- list('n_combined' = length(cRP.ss),'n_pairs' = length(RP.ss)/2,
-   #                        'combined_file' = event.flashed.reads.fa, 'paired_file' = event.readPairs.fa,'span1.fq' = span1.fq,'span2.fq' = span2.fq)
-   #    if (readsPP.out[['n_combined']] > 0){writeXStringSet(x = cRP.ss,file = event.flashed.reads.fa)}
-   #    if (readsPP.out[['n_pairs']] > 0){writeXStringSet(x = RP.ss,file = event.readPairs.fa)}
-   # } else {
-   #    RP.ss <- DNAStringSet(x = c(e_seq.df$readA,e_seq.df$readB))
-   #    names(RP.ss) <- c(paste(event,'A',1:nrow(e_seq.df),sep='_'),paste(event,'B',1:nrow(e_seq.df),sep='_'))
-   #    readsPP.out <- list('n_combined' = 0,'n_pairs' = length(RP.ss)/2,
-   #                        'combined_file' = event.flashed.reads.fa, 'paired_file' = event.readPairs.fa,'span1.fq' = span1.fq,'span2.fq' = span2.fq)
-   #    writeJunctionFa(reads = RP.ss,pairedFastaFileRoot = event.readPairs.fa)
-   #    if (file.exists(event.flashed.reads.fa)){unlink(event.flashed.reads.fa)}
-   # }
-   # # remove.polyA = FALSE
-   # # if (remove.polyA){
-   # #    nA = 7
-   # #    polyA_idx <- which(endsWith(as.character(reads.ss),paste(rep('A',nA),collapse='')))
-   # #    reads.ss[polyA_idx] <- sapply(as.character(reads.ss[polyA_idx]),'trimTrailingPolyA',nA)
-   # #
-   # #    polyT_idx <- which(startsWith(as.character(reads.ss),paste(rep('T',nA),collapse='')))
-   # #    reads.ss[polyT_idx] <- sapply(as.character(reads.ss[polyT_idx]),'trimLeadingPolyT',nA)
-   # # }
-   #
-   # # readsPP.out <- list('n_combined' = length(cRP.ss),'n_pairs' = length(RP.ss)/2,
-   # #                   'combined_file' = event.flashed.reads.fa, 'paired_file' = event.readPairs.fa)
-   # # if (readsPP.out[['n_combined']] > 0){writeXStringSet(x = cRP.ss,file = event.flashed.reads.fa)}
-   # # if (readsPP.out[['n_pairs']] > 0){writeXStringSet(x = cRP.ss,file = event.flashed.reads.fa)}
-   # #
-   # # if (readsPP.out[['n_pairs']] > 0){writeJunctionFa(reads = RP.ss,pairedFastaFileRoot = event.readPairs.fa)}
-   #
-   # # Recall:
-   # # event.readPairs.fa <- file.path(event.tx.dir,paste(file.prefix,'_event_',event,'_pairs.fa',sep=''))
-   # # event.flashed.reads.fa <- file.path(event.tx.dir,paste(file.prefix,'_event_',event,'_flash.fa',sep=''))
-   # #
-   # if (file.exists(event.readPairs.fa) & file.size(event.readPairs.fa) > 0){
-   #    short.paired_param <- paste('-shortPaired',event.readPairs.fa)
-   # } else {short.paired_param <- ''}
-   # if (readsPP.out$n_combined > 0 & file.exists(event.flashed.reads.fa) & file.size(event.flashed.reads.fa) > 0){
-   #    short.combined_param <- paste('-short',event.flashed.reads.fa)
-   # } else {short.combined_param <- ''}
-   #
-   # if (prehash_reads){
-   #    velveth.cmd <- paste(paste(velvet_path,'velveth',sep='/'), event.tx.dir, 21,'-fasta',
-   #                         short.paired_param,short.combined_param,'-noHash')
-   #    system(velveth.cmd, ignore.stdout = TRUE)
-   # }
-   #
-   # return(readsPP.out)
 }
 
 runVelvet <- function(seq.df,tx.dir,file.prefix){
@@ -1350,11 +1312,13 @@ contigParser <- function(tx_out_dir,merged){
 
 }
 
-runSpades <- function(seq.df,tx.dir,event,overwrite_tx,check_spades,use_preRR = FALSE){
+runSpades <- function(seq.df,tx.dir,event,overwrite_tx,use_preRR = FALSE,pause = FALSE,CPU = 1){
+   if (pause){Sys.sleep(time = abs(rnorm(1,mean = .5)))}
+   event0 <- formatC(x = event,width =3,flag = 0,format = 'd')
    e_seq.df <- seq.df[seq.df$DNA_eventId == event,]
    DNA_sampleId <- unique(e_seq.df$DNA_sampleId)
-   event.tx.dir <- file.path(tx.dir,paste('event',event,sep='_'))
-   if (!dir.exists(event.tx.dir)){dir.create(event.tx.dir)}
+   event.tx.dir <- file.path(tx.dir,paste('event',event0,sep='_'))
+   if (!dir.exists(event.tx.dir)){dir.create(event.tx.dir,recursive = TRUE)}
 
    n_spann_RPs <- nrow(e_seq.df)
 
@@ -1362,32 +1326,28 @@ runSpades <- function(seq.df,tx.dir,event,overwrite_tx,check_spades,use_preRR = 
 
    event.dir = event.tx.dir
    tx.fa <- file.path(event.dir,'good.transcripts.fa')
+   tx.stats <- file.path(event.dir,'good.transcripts.stats.csv')
+   tx.out.csv <- file.path(event.dir,'TX.csv')
 
-   if (!file.exists(tx.fa) | check_spades | overwrite_tx){
+   event_input.dir <- file.path(event.dir,'raw_input')
 
+   event.bam <- file.path(event_input.dir,'event.bam')
+   span1.fq <- file.path(event_input.dir,'span.1.fq')
+   span2.fq <- file.path(event_input.dir,'span.2.fq')
 
-      # deNovoAssemblyPrep(event.dir = event.tx.dir,jct.gr = jct.gr,
-      #                    aligned.bam = aligned.bam,
-      #                    chimeric.bam = chimeric.bam)
-      event.bam <- file.path(event.tx.dir,'event.bam')
-      span1.fq <- file.path(event.tx.dir,'span.1.fq')
-      span2.fq <- file.path(event.tx.dir,'span.2.fq')
-      #span1.fq  = readsPP.out$span1.fq; span2.fq = readsPP.out$span2.fq
+   run_spades <- !file.exists(tx.fa) | !file.exists(tx.stats) | !file.exists(tx.out.csv) | overwrite_tx
+
+   if (run_spades){
 
       min.tx.length = 200
 
-      n_reads <- system(command = paste('grep -c "@"',file.path(event.dir,'all.1.fq')),intern=TRUE)
-      # message(paste0('\n----------------\nEvent ',event,' de novo assembly:\nTotal RPs:\t\t',n_reads,'\nSpanning RPs:\t\t',n_spann_RPs))
-      # overwrite =
-      # tx.fa <- file.path(event.dir,'good.transcripts.fa')
+      n_reads <- system(command = paste('grep -c "@"',file.path(event_input.dir,'all.1.fq')),intern=TRUE)
 
+      unlink(x = c(tx.fa,tx.stats,tx.out.csv,file.path(event.dir,'spades'),file.path(event.dir,'spanning'),file.path(event.dir,'transrate')))
 
-      spades.out <- spades(event = event,event.bam = event.bam,jct.gr = jct.gr,
-                           event.dir = event.dir,overwrite_tx = overwrite_tx,use_preRR = use_preRR)
-      #tx.ss <- spades.out$tx.ss
-      #tx.gr =
-
-
+      spades.out <- spades(event = event,event.bam = event.bam,jct.gr = jct.gr,event_input.dir = event_input.dir,
+                           event.dir = event.dir,use_preRR = use_preRR,CPU = CPU,
+                           overwrite_tx = overwrite_tx)
    }
 
    if (file.exists(tx.fa) && file.size(tx.fa) > 0){
@@ -1398,7 +1358,6 @@ runSpades <- function(seq.df,tx.dir,event,overwrite_tx,check_spades,use_preRR = 
    }
 
    if (n_tx > 0){
-      #e_tx.gr <- makeGRangesFromDataFrame(read.table(file = file.path(event.dir,'good.transcripts.alignments.tsv'), sep=' ',header=TRUE),keep.extra.columns = TRUE)
       e_stats.df <- read.table(file = file.path(event.dir,'good.transcripts.stats.csv'),sep=' ',header=TRUE)
 
       e_tx.df <- data.frame('DNA_sampleId' = rep(DNA_sampleId,times=n_tx),
@@ -1415,30 +1374,15 @@ runSpades <- function(seq.df,tx.dir,event,overwrite_tx,check_spades,use_preRR = 
                             'geneA' = rep(unique(e_seq.df$geneA),n_tx),
                             'geneB' = rep(unique(e_seq.df$geneB),n_tx))
       e_tx.df <- cbind(e_tx.df,e_stats.df)
-
-
-
-      # TO DO: switch these - replace tx_num with contig_name
       e_tx.df$tx_num <- e_tx.df$contig_name
-
-
       write.table(x = e_tx.df, file = file.path(event.dir,'TX.csv'),quote = FALSE,row.names = FALSE,sep=',')
-
-
-
-
-
-
-
-
 
    }
 
    # output event summary ----
 
-
-   n_RNA_RPs <- countFastaEntries(file.path(event.dir,'all.1.fq'))
-   bam.stats <- capture.output(quickBamFlagSummary(file.path(event.dir,'event.bam')))
+   n_RNA_RPs <- countFastaEntries(file.path(event_input.dir,'all.1.fq'))
+   bam.stats <- capture.output(quickBamFlagSummary(file.path(event_input.dir,'event.bam')))
    n_contigs <- countFastaEntries(file.path(event.dir,'spanning/good_spanning_contigs.fa'))
    n_before_rr <- countFastaEntries(file.path(event.dir,'spanning/spades/before_rr.fasta'))
 
@@ -1469,7 +1413,7 @@ runSpades <- function(seq.df,tx.dir,event,overwrite_tx,check_spades,use_preRR = 
       spanning_transrate_line <- paste0('Transrate metrics:\n  o Good contigs: ',n_good_spanning_contigs,'\n  o Fragments mapped: ',spanning_spades_out[1,'fragments_mapped'],' / ',spanning_spades_out[1,'fragments'],' (',format(x = 100*spanning_spades_out[1,'p_fragments_mapped'],digits = 3),'%)',
                                         '\n  o Good mappings: ',spanning_spades_out[1,'good_mappings'],'\n  o Assembly score: ',spanning_spades_out[1,'score'],'; optimal score: ',spanning_spades_out[1,'optimal_score'])
       summary_str <- c(summary_str,spanning_transrate_line)
-   }
+   } else {n_good_spanning_contigs <- 0}
 
    n_contigs <- countFastaEntries(file.path(event.dir,'good.transcripts.fa'))
    n_raw_spades_out <- countFastaEntries(file.path(event.dir,'spades/transcripts.fasta'))
@@ -1497,27 +1441,44 @@ runSpades <- function(seq.df,tx.dir,event,overwrite_tx,check_spades,use_preRR = 
 
    tx.log <- file.path(event.dir,'tx.log')
    writeLines(text = summary_str,con = tx.log)
-
+   if (n_contigs > 0){
+      message('Spades assembly successful for event ',event)
+      tx.df <- read.table(file =  file.path(event.dir,'good.transcripts.stats.csv'),header = TRUE)
+      return(tx.df)
+   } else {
+      message('Spades assembly failed for ',event)
+      return()
+   }
 }
 
 spades <- function(event,event.bam,event.dir,jct.gr,
-                   min.tx.length = 200,
+                   event_input.dir,
                    overwrite_tx = TRUE,
+                   min.tx.length = 200,
                    use_preRR = FALSE,
-                   filterByCDS = FALSE){
-   CPU = 24
+                   filterByCDS = FALSE,
+                   CPU = 1,
+                   use_conda = FALSE){
+   # numCores = 1 # because the whole process is run on multiple cores
+   # use_conda = FALSE
+   if (use_conda){
+      spades_path <- 'conda run -n spades_sandbox rnaspades.py'
+   } else {
+      spades_path <- 'python /research/labs/experpath/vasm/shared/NextGen/judell/lib/SPAdes-3.15.4-Linux/bin/rnaspades.py'
+   }
 
-   # all1.fa <- file.path(event.dir,'all.1.fa')
-   # all2.fa <- file.path(event.dir,'all.2.fa')
-   all1.fq <- file.path(event.dir,'all.1.fq')
-   all2.fq <- file.path(event.dir,'all.2.fq')
-   span1.fq <- file.path(event.dir,'span.1.fq')
-   span2.fq <- file.path(event.dir,'span.2.fq')
+   event0 <- formatC(x = event,width = 3,flag = 0,format = 'd')
+
+   all1.fq <- file.path(event_input.dir,'all.1.fq')
+   all2.fq <- file.path(event_input.dir,'all.2.fq')
+   span1.fq <- file.path(event_input.dir,'span.1.fq')
+   span2.fq <- file.path(event_input.dir,'span.2.fq')
 
    dn.out <- list('tx.ss' = DNAStringSet(),'tx.gr' = GRanges(),'tx.df' = data.frame())
+
    # Spanning read assembly ----
    ## Prep ----
-   # TODO: change names of spanning_fa files from spanning.fa to spades_out.fa or something (1.31.22)
+
    spanning.spades.dir <- file.path(event.dir,'spanning/spades')
    if (!dir.exists(spanning.spades.dir)){dir.create(spanning.spades.dir,recursive = TRUE)}
    spanning_fa <- file.path(spanning.spades.dir,'transcripts.fasta')
@@ -1526,13 +1487,21 @@ spades <- function(event,event.bam,event.dir,jct.gr,
 
    if (!file.exists(spanning_fa) | overwrite_tx){
       unlink(spanning.spades.dir,recursive = TRUE)
-      #unlink(spanning_fa)
+
       dir.create(spanning.spades.dir,recursive = TRUE)
       spades.log <- file.path(spanning.spades.dir,'stdout.txt')
-      spades.cmd <- paste('conda run -n spades_sandbox rnaspades.py -o ',spanning.spades.dir,
-                          '-1', span1.fq,'-2',span2.fq,' > ',spades.log)
 
+      spades.cmd <- paste(spades_path,'-o',spanning.spades.dir,'-t',CPU,
+                          '-1', span1.fq,'-2',span2.fq,' > ',spades.log)
       suppressMessages(system(spades.cmd))
+
+      if (any(grepl(pattern='terminate called without an active exception|finished abnormally',x = readLines(spades.log)))){
+         spades.cmd <- paste(spades_path,'-o',spanning.spades.dir,
+                             '--continue',' &> ',spades.log)
+         system(spades.cmd)
+      }
+
+
 
       spades_preRR.fa  <- file.path(spanning.spades.dir,'before_rr.fasta')
       if (!file.exists(spanning_fa) & file.exists(spades_preRR.fa) & use_preRR){
@@ -1547,8 +1516,6 @@ spades <- function(event,event.bam,event.dir,jct.gr,
       n_spanning_contigs = 0
    }
 
-   message(paste0('Spanning contigs:\t',n_spanning_contigs))
-
    filtered_spanning_fa <- file.path(event.dir,'spanning/good_spanning_contigs.fa')
    transrate.dir <- file.path(event.dir,'spanning/transrate')
    run_transrate <- !file.exists(filtered_spanning_fa) | overwrite_tx
@@ -1559,15 +1526,14 @@ spades <- function(event,event.bam,event.dir,jct.gr,
       unlink(transrate.dir,recursive = TRUE); dir.create(transrate.dir,recursive = TRUE)
       transrate_assemblies_out <- file.path(transrate.dir,'assemblies.csv')
 
-
       unlink(transrate_assemblies_out)
 
       transrate_input.fa <- file.path(transrate.dir,'raw_spanning_contigs.fa')
       unlink(transrate_input.fa)
       file.copy(from = spanning_fa,to = transrate_input.fa)
-      # TODO: option for transrate to not return df, independent of outfile setting (1/31/22)
+
       suppressMessages(spanning.contigs.df <- transrate(fasta.list = transrate_input.fa,
-                                                        f1.fq = span1.fq,f2.fq = span2.fq,CPU=24,transrate.dir = transrate.dir,outfile = filtered_spanning_fa))
+                                                        f1.fq = span1.fq,f2.fq = span2.fq,CPU=CPU,transrate.dir = transrate.dir,outfile = filtered_spanning_fa))
 
    } else if (n_spanning_contigs == 0 ) {
       unlink(filtered_spanning_fa)
@@ -1580,20 +1546,7 @@ spades <- function(event,event.bam,event.dir,jct.gr,
       n_filtered_spanning_contigs = 0
    }
 
-
-
-
-   message(paste0('Transrate`d ...:\t',n_filtered_spanning_contigs))
-   # } else {
-   #    spades.ss <- readDNAStringSet(filepath = spanning_fa,use.names = TRUE)
-   # }
-
-
-
-
    # Spades assembly ----
-
-
    spades.dir <- file.path(event.dir,'spades')
    if (!dir.exists(spades.dir)){dir.create(spades.dir)}
    spades_fa <- file.path(event.dir,'spades/spades.fa')
@@ -1610,23 +1563,22 @@ spades <- function(event,event.bam,event.dir,jct.gr,
       }
 
       spades.log <- file.path(spades.dir,'stdout.txt')
-      spades.cmd <- paste('conda run -n spades_sandbox rnaspades.py -o',spades.dir,
-                          '-1',all1.fq,'-2',all2.fq,trusted_contigs_param,
+      spades.cmd <- paste(spades_path,'-o',spades.dir,
+                          '-1',all1.fq,'-2',all2.fq,trusted_contigs_param,'-t',CPU,
                           '>',spades.log)
       system(spades.cmd)
 
-
-
-
+      if (any(grepl(pattern='terminate called without an active exception|finished abnormally',x = readLines(spades.log)))){
+         spades.cmd <- paste(spades_path,'-o',spades.dir,
+                             '--continue',
+                             '>',spades.log)
+         system(spades.cmd)
+      }
 
       if (file.exists(spades_output) && file.size(spades_output) > 0){
          tx <- read.fasta(file = spades_output,
                           as.string = TRUE,set.attributes = FALSE)
-
-         # message(paste0('Contigs:\t\t',length(tx)))
-
          names.df <- data.frame(strsplit(names(tx),'_'))
-
          spades_tx.df <- data.frame('names' = names(tx),
                                     'node' = as.character(names.df[2,]),
                                     'length' = as.integer(names.df[4,]),
@@ -1635,14 +1587,9 @@ spades <- function(event,event.bam,event.dir,jct.gr,
                                     'Loc' = sub('i','',names.df[8,]),
                                     'seq' = as.character(tx),
                                     stringsAsFactors = FALSE)
-
          spades_tx.df$gene_obvs <- sapply(X = spades_tx.df$gene,FUN = function(i) sum(spades_tx.df$gene == i))
-
-         spades_tx.df$tx_num <- paste('J',event,'spades','Loc',spades_tx.df$gene,'Iso',spades_tx.df$Loc,sep='_')
+         spades_tx.df$tx_num <- paste('J',event0,'Loc',spades_tx.df$gene,'Iso',spades_tx.df$Loc,sep='_')
          spades.ss <- DNAStringSet(x = spades_tx.df$seq); names(spades.ss) <- spades_tx.df$tx_num
-
-
-
          writeXStringSet(x = spades.ss,filepath = spades_fa)
       } else {
 
@@ -1652,14 +1599,12 @@ spades <- function(event,event.bam,event.dir,jct.gr,
       spades.ss <- readDNAStringSet(filepath = spades_fa,use.names = TRUE)
    }
 
-
    if (file.exists(spades_fa) && file.size(spades_fa) > 0){
       n_assembled_contigs = length(spades.ss)
    } else {
       n_assembled_contigs = 0
    }
 
-   message(paste0('Assembled contigs:\t',n_assembled_contigs))
    if (n_assembled_contigs == 0){
       return(dn.out)
    }
@@ -1680,118 +1625,25 @@ spades <- function(event,event.bam,event.dir,jct.gr,
    }
 
    tx.ss <- readDNAStringSet(assembled_tx_out.fa)
-   n_transrated_contigs <- length(tx.ss) # as.integer(system(paste('grep ">" -c',spades_fa),intern=TRUE))
-   message(paste0('Transrate`d ...:\t',n_transrated_contigs))
-   # blat against
-
-   # blat against genomic region ----
-   blat.dir <- file.path(event.dir,'blat')
-   blat.outfile <- file.path(blat.dir,'blat.out.psl')
-   if (n_assembled_contigs > 0 & ( !file.exists(blat.outfile) | overwrite_tx)){
-
-      if (!dir.exists(blat.dir)){dir.create(blat.dir)}
-      blatA.outfile <- file.path(blat.dir,'blatA.out.psl')
-      blatB.outfile <- file.path(blat.dir,'blatB.out.psl')
-      # blat.outfile <- file.path(blat.dir,'blat.out.psl')
-      blatA.cmd <- paste('blat',
-                         paste0('/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.2bit:',
-                                as.character(jct.gr[1])),
-                         assembled_tx_out.fa,blatA.outfile,
-                         '-ooc=/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38.11.ooc -fine -q=rna -maxGap=1 -out=blast8 &> /dev/null')
-      blatB.cmd <- paste('blat',
-                         paste0('/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38_chromosomesOnly_noMask.2bit:',
-                                as.character(jct.gr[2])),
-                         assembled_tx_out.fa,blatB.outfile,
-                         '-ooc=/research/labs/experpath/vasm/shared/Genome/Human/GRCh38/GCRh38.11.ooc -fine -q=rna -maxGap=1 -out=blast8 &> /dev/null')
-      system(blatA.cmd)
-      system(blatB.cmd)
-      cat.cmd <- paste('cat',blatA.outfile,blatB.outfile,'>',blat.outfile)
-      system(cat.cmd)
-   }
-
-
-   blast8_names <- c('query','chr','percent_id','alignment_length','mismatches','gap_o',
-                     'query_start','query_end','subject_start','subject_end','E_value','bit_score')
-   blat_results <- read.table(blat.outfile,header = FALSE,sep = '\t',col.names = blast8_names,stringsAsFactors = FALSE)
-   blat_results$region <- blat_results$chr
-   blat_results$chr <- sapply(strsplit(blat_results$region,':'),FUN='[',1)
-
-   blat_results$subject_start <- blat_results$subject_start + as.integer(sapply(strsplit(blat_results$region,':|-'),FUN='[',2))
-   blat_results$subject_end <- blat_results$subject_end + as.integer(sapply(strsplit(blat_results$region,':|-'),FUN='[',2))
-   blat_results$strand <- ifelse(blat_results$subject_end - blat_results$subject_start > 0,'+','-')
-   blat_results[blat_results$subject_end - blat_results$subject_start < 0,c('subject_start','subject_end')] <- blat_results[blat_results$subject_end - blat_results$subject_start < 0,c('subject_end','subject_start')]
-   blat_results$method <- factor(ifelse(grepl('spades',blat_results$query),'spades','velvet'))
-   blat_results$event <- event
-
-
-   blat.gr <- makeGRangesFromDataFrame(df = blat_results,keep.extra.columns = TRUE,ignore.strand = FALSE,seqnames.field = 'chr',
-                                       start.field = 'subject_start',end.field = 'subject_end')
-
-
-
-
-   # Filter transcripts by CDS ----
-   filterByCDS <- FALSE
-   if (filterByCDS){
-      cds.gr <- unlist(cdsBy(x = edb.ucsc,by = 'tx',filter = GRangesFilter(value = c(jct.gr,invertStrand(jct.gr))),columns = c('gene_name','protein_id','exon_idx','tx_id','tx_biotype')))
-      cds.gr$tx <- row.names(cds.gr); names(cds.gr) <- NULL
-
-      utr5.gr <- unlist(fiveUTRsByTranscript(x = edb.ucsc,filter = GRangesFilter(value = jct.gr)))
-      utr3.gr <- unlist(threeUTRsByTranscript(x = edb.ucsc,filter = GRangesFilter(value = jct.gr)))
-
-      if (length(cds.gr) > 0){blat.gr$cds <- blat.gr %over% cds.gr | invertStrand(blat.gr) %over% cds.gr} else if (length(blat.gr) > 0){blat.gr$cds = FALSE}
-      if (length(utr5.gr) > 0){blat.gr$utr5 <- blat.gr %over% utr5.gr | invertStrand(blat.gr) %over% utr5.gr} else if (length(blat.gr) > 0){blat.gr$utr5 = FALSE}
-      if (length(utr3.gr) > 0){blat.gr$utr3 <- blat.gr %over% utr3.gr | invertStrand(blat.gr) %over% utr3.gr} else if (length(blat.gr) > 0){blat.gr$utr3 = FALSE}
-
-      good_criteria <- sapply(X = names(tx.ss),FUN = function(i) any(blat.gr$cds[blat.gr$query == i])) # &sapply(X = names(tx.ss),FUN = function(i) any(blat.gr$utr5[blat.gr$query == i]))
-
-      good_tx <- names(tx.ss)[which(good_criteria)]
-
-      good.ss <- tx.ss[names(tx.ss) %in% good_tx]
-      # system(rnaQUAST.cmd)
-      n_blatted_contigs = length(good.ss)
-      blat.gr <- blat.gr[blat.gr$query %in% good_tx]
-      message(paste0('Blatted contigs:\t',n_blatted_contigs))
-   }
-
-
-
-
+   n_transrated_contigs <- length(tx.ss)
 
    # Wrangle output ----
-   tx.gr.file <- file.path(event.dir,'good.transcripts.alignments.tsv')
+
    tx.df.file <- file.path(event.dir,'good.transcripts.stats.csv')
    out.fa <- file.path(event.dir,'good.transcripts.fa')
-   #return(filtered_tx.df)
    if (n_transrated_contigs > 0){
-
       writeXStringSet(x = tx.ss,filepath = out.fa)
-
-
-      tx.gr = blat.gr
-
-
-      write.table(x = tx.gr,file = tx.gr.file,quote = FALSE,row.names = FALSE)
-
-
       tx.df = tx.out
       tx.df$nSpanningContigs = n_filtered_spanning_contigs
-
       write.table(x = tx.df,file = tx.df.file,quote = FALSE, row.names = FALSE)
-
-
-
    } else {
-      unlink(x = c(tx.gr.file,tx.df.file,out.fa))
-      tx.gr <- GRanges()
+      unlink(x = c(tx.df.file,out.fa))
+      # tx.gr <- GRanges()
       tx.df <- data.frame()
       tx.ss <- DNAStringSet()
    }
 
-
-
-
-   dn.out <- list('tx.ss' = tx.ss,'tx.gr' = tx.gr,'tx.df' = tx.df)
+   dn.out <- list('tx.ss' = tx.ss,'tx.df' = tx.df)
    return(dn.out)
 }
 
@@ -1929,6 +1781,7 @@ deNovoAssemblyPrep <- function(event.dir,jct.gr,aligned.bam,chimeric.bam,overwri
                                                            flag = scanBamFlag(isPaired = TRUE,
                                                                               isDuplicate = FALSE,
                                                                               isProperPair = TRUE,
+                                                                              isUnmappedQuery = FALSE,
                                                                               hasUnmappedMate = FALSE),
                                                            what = c('flag','qname','rname','strand','pos','seq')))
 
@@ -1939,6 +1792,7 @@ deNovoAssemblyPrep <- function(event.dir,jct.gr,aligned.bam,chimeric.bam,overwri
                                                            flag = scanBamFlag(isPaired = TRUE,
                                                                               isDuplicate = FALSE,
                                                                               isProperPair = TRUE,
+                                                                              isUnmappedQuery = FALSE,
                                                                               hasUnmappedMate = FALSE),
                                                            what = c('flag','qname','rname','strand','pos','seq')))
 
@@ -1948,31 +1802,40 @@ deNovoAssemblyPrep <- function(event.dir,jct.gr,aligned.bam,chimeric.bam,overwri
 
       event.chimeric.A.bam <- file.path(event.dir,'chimeric.A.bam')
       event.chimeric.B.bam <- file.path(event.dir,'chimeric.B.bam')
-      eventChimericReadsA <- filterBam(file = chimeric.bam,index = chimeric.bam,region = jct.gr,
+      eventChimericReadsA <- filterBam(file = chimeric.bam,index = chimeric.bam,# region = jct.gr[1],
+                                       indexDestinaton = FALSE, overwrite = TRUE,
                                        destination = event.chimeric.A.bam,
-                                       param = ScanBamParam(which = jct.gr,
+                                       param = ScanBamParam(which = jct.gr[1],
                                                             flag = scanBamFlag(isPaired = TRUE,
                                                                                isDuplicate = FALSE,
                                                                                isProperPair = TRUE,
+                                                                               isUnmappedQuery = FALSE,
                                                                                hasUnmappedMate = FALSE),
                                                             what = c('mate_status','flag','mapq','qname','rname','strand','pos','seq')))
-      eventChimericReadsB <- filterBam(file = chimeric.bam,index = chimeric.bam,region = jct.gr,
+      eventChimericSortedReadsA <- sortBam(file = event.chimeric.A.bam,byQname = FALSE, destination = file.path(event.dir,'chimeric.A.sorted'))
+
+      eventChimericReadsB <- filterBam(file = chimeric.bam,index = chimeric.bam,# region = jct.gr[2],
                                        destination = event.chimeric.B.bam,
-                                       param = ScanBamParam(which = jct.gr,
+                                       indexDestination = FALSE, overwrite = TRUE,
+                                       param = ScanBamParam(which = jct.gr[2],
                                                             flag = scanBamFlag(isPaired = TRUE,
                                                                                isDuplicate = FALSE,
                                                                                isProperPair = TRUE,
+                                                                               isUnmappedQuery = FALSE,
                                                                                hasUnmappedMate = FALSE),
                                                             what = c('mate_status','flag','mapq','qname','rname','strand','pos','seq')))
+      eventChimericSortedReadsB <- sortBam(file = event.chimeric.B.bam,byQname = FALSE, destination = file.path(event.dir,'chimeric.B.sorted'))
+
+
       # # Save BAM files ----
 
 
-      foo <- mergeBam(files = c(aligned.A.bam,aligned.B.bam,event.chimeric.A.bam,event.chimeric.B.bam),destination = event.bam,
+      foo <- mergeBam(files = c(aligned.A.bam,aligned.B.bam,eventChimericSortedReadsA,eventChimericSortedReadsB),destination = event.bam,
                       indexDestination = TRUE,
                       overwrite = TRUE)
 
       # cleanup ----
-      to_rm <- c(aligned.A.bam,aligned.B.bam,event.chimeric.A.bam,event.chimeric.B.bam)
+      to_rm <- c(aligned.A.bam,aligned.B.bam,event.chimeric.A.bam,event.chimeric.B.bam,eventChimericSortedReadsB,eventChimericSortedReadsA)
       unlink(c(to_rm,paste0(to_rm,'.bai')))
    }
    fa.write.flag <-  !file.exists(all1.fq) | !file.exists(all2.fq) | overwrite
@@ -2023,19 +1886,22 @@ deNovoAssemblyPrep <- function(event.dir,jct.gr,aligned.bam,chimeric.bam,overwri
 }
 
 
-eventwiseDeNovoAssemblyPrep <- function(seq.df,event,tx.dir,overwrite = TRUE){
-   message(paste('Processing event',event,'files...'))
-   event.dir <- file.path(tx.dir,paste0('event_',event))
-   if (!dir.exists(event.dir)){dir.create(event.dir,recursive = TRUE)}
+eventwiseDeNovoAssemblyPrep <- function(seq.df,event,tx.dir,aligned.bam = NA,chimeric.bam = NA,
+                                        overwrite = TRUE){
+   # message(paste('Processing event',event,'files...'))
+   event0 <- formatC(x = event,width =3,flag = 0,format = 'd')
+   event.dir <- file.path(tx.dir,paste0('event_',event0))
+   raw_event.dir <- file.path(event.dir,'raw_input')
+   if (!dir.exists(raw_event.dir)){dir.create(raw_event.dir,recursive = TRUE)}
 
 
    # if (method == 'transrate'){flash.threshold = 10000000}
-   span1.fq <- file.path(event.dir,'span.1.fq')
-   span2.fq <- file.path(event.dir,'span.2.fq')
+   span1.fq <- file.path(raw_event.dir,'span.1.fq')
+   span2.fq <- file.path(raw_event.dir,'span.2.fq')
    write_spanning_frag_flag <- !file.exists(span1.fq) | !file.exists(span1.fq)
    if (overwrite | write_spanning_frag_flag){
       readsPP.out <- spanningRPsPreProcessing(seq.df = seq.df,event = event,
-                                              event.tx.dir = event.dir,
+                                              event.tx.dir = raw_event.dir,
                                               #file.prefix = file.prefix,
                                               # flash.threshold = 1000000000,
                                               # remove.polyA = FALSE,
@@ -2048,11 +1914,11 @@ eventwiseDeNovoAssemblyPrep <- function(seq.df,event,tx.dir,overwrite = TRUE){
 
 
 
-   deNovoAssemblyPrep(event.dir = event.dir,jct.gr = jct.gr,
+   deNovoAssemblyPrep(event.dir = raw_event.dir,jct.gr = jct.gr,
                       aligned.bam = aligned.bam,
                       chimeric.bam = chimeric.bam,overwrite = overwrite)
 
-   span.bam <- file.path(event.dir,'span.bam')
+   span.bam <- file.path(raw_event.dir,'span.bam')
    if (!file.exists(span.bam) | overwrite){
       blep <- system(paste('bwa mem',gen_ref_path,span1.fq,span2.fq,' 2> /dev/null | samtools view -b - | samtools sort - -o',span.bam,'&& samtools index',span.bam,'&> /dev/null'),
                      ignore.stdout = TRUE,ignore.stderr = TRUE,intern = FALSE)
@@ -2072,7 +1938,7 @@ getGRangesFromInputDF <- function(seq.df = seq.df,event = event){
 }
 
 salmon <- function(tx.dir,salmon_input.fa,reads1,reads2,tpm_threshold = 30,overwrite = FALSE,numCores = 12){
-
+   if (!file.exists(salmon_input.fa)){return(data.frame())}
 
    salmon.dir <- file.path(tx.dir,'salmon'); if (!dir.exists(salmon.dir)){dir.create(salmon.dir)}
 

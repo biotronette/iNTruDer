@@ -477,11 +477,21 @@ intruderPep <- function(tx.df,blat.gr,
 
 }
 
-findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.gr = NA,kmer_cutoff = 5,kmer_size = 5,min_length_novel = 1){
-  # edb <- AnnotationDbi::loadDb(file = dbfile(dbconn(EnsDb.Hsapiens.v105)))
-  edb <- EnsDb(x = system.file('extdata/EnsDb.Hsapiens.v105.sqlite',package='EnsDb.Hsapiens.v105'))
-  # edb <- useMySQL(x = EnsDb.Hsapiens.v105, user = '',pass = '',host = 'localhost')
-  on.exit(RSQLite::dbDisconnect(dbconn(edb)))
+findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,
+                    np.log.file = NA,tx.blacklist = '',
+                    out.file = NA,jct.gr = NA,kmer_cutoff = 5,kmer_size = 5,
+                    min_length_novel = 1,overwrite_np = FALSE){
+   if (is.na(np.log.file) ){
+      np.log.file <- file.path(np.dir,'np.out')
+   }
+   if (file.exists(out.file) & !overwrite_np){
+      return(NULL)
+   }
+
+   # edb <- AnnotationDbi::loadDb(file = dbfile(dbconn(EnsDb.Hsapiens.v105)))
+   edb <- EnsDb(x = system.file('extdata/EnsDb.Hsapiens.v105.sqlite',package='EnsDb.Hsapiens.v105'))
+   # edb <- useMySQL(x = EnsDb.Hsapiens.v105, user = '',pass = '',host = 'localhost')
+   on.exit(RSQLite::dbDisconnect(dbconn(edb)))
 
    seqlevelsStyle(edb) <- "UCSC"
 
@@ -495,6 +505,7 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    # blat checkpoint ----
    if (!tx_name %in% blat.gr$query){
       output[['log']] <- 'no BLAT hit'
+      cat(paste(tx_name,output[['log']]),file = np.log.file,sep='\n',append = TRUE)
       return(output)
    }
 
@@ -502,19 +513,20 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    orf_prediction <- orfFinderJS(checkSeq = as.character(tx_seq))
    if (is.null(orf_prediction)){
       output[['log']] <- 'no ORFs found'
-      # message('No ORFs found.')
+      cat(paste(tx_name,output[['log']]),file = np.log.file,sep='\n',append = TRUE)
       return(output)
    }
 
 
    if (!is.null(diamond.df) && any(diamond.df$query == tx_name)){
       tx_inDiamond <- sapply(X = 1:nrow(orf_prediction), USE.NAMES = FALSE,
-                                         FUN = function(i) any( orf_prediction[i,'startPos'] == diamond.df[diamond.df$query == tx_name,'query_start'] &
-                                                                   orf_prediction[i,'endPos'] == diamond.df[diamond.df$query == tx_name,'query_end']) &&
-                                            diamond.df[diamond.df$query == tx_name & diamond.df$query_start == orf_prediction[i,'startPos'] & diamond.df$query_end == orf_prediction[i,'endPos'],'percent_id'] >= 99)
+                             FUN = function(i) any( orf_prediction[i,'startPos'] == diamond.df[diamond.df$query == tx_name,'query_start'] &
+                                                       orf_prediction[i,'endPos'] == diamond.df[diamond.df$query == tx_name,'query_end']) &&
+                                diamond.df[diamond.df$query == tx_name & diamond.df$query_start == orf_prediction[i,'startPos'] & diamond.df$query_end == orf_prediction[i,'endPos'],'percent_id'] >= 99)
 
       if (any(tx_inDiamond)){
          output[['log']] <- 'Perfect prot match'
+         cat(paste(tx_name,output[['log']]),file = np.log.file,sep='\n',append = TRUE)
          return(output)
       }
    }
@@ -599,6 +611,7 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
 
    if (length(gene_prot) == 0){
       output[['log']] <- 'No prot found'
+      cat(paste(tx_name,output[['log']]),file = np.log.file,sep='\n',append = TRUE)
       return(output)
    }
 
@@ -623,6 +636,7 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    if (length(orf_kmers) < 3){
       # message('No unique kmers; exiting.')
       output[['log']] <- 'no unique kmers'
+      cat(paste(tx_name,output[['log']]),file = np.log.file,sep='\n',append = TRUE)
       return(output)
    }
 
@@ -637,14 +651,15 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    kmer_hits_pairs_mat <- matrix(kmer_hits_pairs,nrow = nrow(orf_kmers))
 
 
-
-   kmer_hits_out <- foreach(x = kmer_hits_pairs,.combine=c) %dopar% {sum(names(orf_kmers)[orf_kmers[as.integer(strsplit(x,',')[[1]][1]),] == 1] %in% names(aa_kmers)[aa_kmers[as.integer(strsplit(x,',')[[1]][2]),] == 1])}
+   # register(MulticoreParam(workers = 3))
+   kmer_hits_out <- foreach(x = kmer_hits_pairs,.combine=c) %do% {sum(names(orf_kmers)[orf_kmers[as.integer(strsplit(x,',')[[1]][1]),] == 1] %in% names(aa_kmers)[aa_kmers[as.integer(strsplit(x,',')[[1]][2]),] == 1])}
    kmer_hits <- matrix(kmer_hits_out,nrow = nrow(orf_kmers))
 
 
    if (!any(kmer_hits > 0)){
       # message('No kmer hits.')
       output[['log']] <- 'No kmer hits'
+      cat(paste(tx_name,output[['log']]),sep='\n',file = np.log.file,append = TRUE)
       return(output)
    }
 
@@ -652,6 +667,7 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    if (!any(kmer_hits >= kmer_cutoff)){
       # message('Insufficient kmer hits.')
       output[['log']] <- 'n_kmers < kmer_cutoff'
+      cat(paste(tx_name,output[['log']]),sep='\n',file = np.log.file,append = TRUE)
       return(output)
    }
 
@@ -698,6 +714,7 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    } else if (nrow(orf_match) > 1){
       output$log <- 'Multiple plausible ORF hits'
       return(output)
+      cat(paste(tx_name,output[['log']]),sep='\n',file = np.log.file,append = TRUE)
    }
 
 
@@ -717,9 +734,13 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
    } else if (nrow(orf_match) == 0){
       # message('No matching ORFs found.')
       output[['log']] <- 'No WT prot hits'
+      # write.table(x = out.df,file = out.file,col.names = FALSE,row.names = FALSE,quote = FALSE)
+      cat(paste(tx_name,output[['log']]),sep='\n',file = np.log.file,append = TRUE)
       return(output)
    } else {
       output[['log']] <- 'Multiple ORF hits'
+      # write.table(x = out.df,file = out.file,col.names = FALSE,row.names = FALSE,quote = FALSE)
+      cat(paste(tx_name,output[['log']]),sep='\n',file = np.log.file,append = TRUE)
       return(output)
    }
 
@@ -809,6 +830,9 @@ findORF <- function(tx_seq,tx_name,diamond.df,blat.gr,np.dir,out.file = NA,jct.g
          # message('Insufficient novel sequence.')
          out.df$novel_seq <- ''
          out.log <- 'No novel seq'
+         output[['log']] <- out.log
+         cat(paste(tx_name,output[['log']]),file = np.log.file,append = TRUE)
+         return(output)
          #output[['log']] <- 'No novel seq'
          #return(output)
       }
@@ -925,6 +949,7 @@ matchORF <- function(tx_seq,gene_prot,tx_name,diamond.df,sid,
       if (length(gene_prot) == 0){
          message('No matching proteins.')
          output[['log']] <- 'No matching proteins'
+         write.table(x = out.df,file = out.file,col.names = FALSE,row.names = FALSE,quote = FALSE)
          return(output)
       }
 
@@ -933,6 +958,7 @@ matchORF <- function(tx_seq,gene_prot,tx_name,diamond.df,sid,
          if (length(gene_prot) == 0){
             message('No matching proteins of sufficient length.')
             output[['log']] <- 'gene_prot too short'
+            write.table(x = out.df,file = out.file,col.names = FALSE,row.names = FALSE,quote = FALSE)
             return(output)
          }
       }
@@ -940,6 +966,7 @@ matchORF <- function(tx_seq,gene_prot,tx_name,diamond.df,sid,
       if (as.character(tx_seq) == as.character(reverseComplement(DNAString(tx_seq)))){
          message('Sequence is a palindrome!')
          output[['log']] <- 'Palindromic TX'
+         write.table(x = out.df,file = out.file,col.names = FALSE,row.names = FALSE,quote = FALSE)
          return(output)
       }
 
@@ -954,6 +981,7 @@ matchORF <- function(tx_seq,gene_prot,tx_name,diamond.df,sid,
       if (is.null(orf_prediction)){
          output[['log']] <- 'no ORFs found'
          message('No ORFs found.')
+         write.table(x = out.df,file = out.file,col.names = FALSE,row.names = FALSE,quote = FALSE)
          return(output)
       }
 

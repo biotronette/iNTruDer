@@ -1,7 +1,7 @@
 Package: iNTruDer
 Type: Package
 Title: Identification of Novel Truncation-Derived Peptides
-Version: 0.1.0
+Version: 0.2.1
 Author: Julia Udell
 Maintainer: Julia Udell <julia.udell@gmail.com>
 Depends: Biostrings,
